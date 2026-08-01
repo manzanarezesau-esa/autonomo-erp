@@ -1,37 +1,12 @@
 # pdf_utils.py
 import io
-import os
 import base64
-import requests
-import pdfkit
-from jinja2 import Template
 import qrcode
 from qrcode.image.pil import PilImage
+from jinja2 import Template
 import streamlit as st
-
-# ------------------------------------------------------------
-# Rutas posibles de wkhtmltopdf en Linux (Streamlit Cloud y local)
-# ------------------------------------------------------------
-_POSSIBLE_WKHTML_PATHS = [
-    "/usr/bin/wkhtmltopdf",                # Ruta más común en Linux
-    "/usr/local/bin/wkhtmltopdf",          # Otra ubicación frecuente
-    "/tmp/wkhtmltopdf",                    # Descarga manual previa
-    "/app/bin/wkhtmltopdf",                # En algunos contenedores
-    r"C:\Program Files\wkhtmltopdf\bin\wkhtmltopdf.exe",  # Windows
-]
-
-pdfkit_config = None
-for path in _POSSIBLE_WKHTML_PATHS:
-    if os.path.exists(path):
-        pdfkit_config = pdfkit.configuration(wkhtmltopdf=path)
-        break
-
-if pdfkit_config is None:
-    st.error("No se encontró wkhtmltopdf. Los PDF no se podrán generar. Instálalo en el sistema.")
-else:
-    # Opcional: puedes descomentar la siguiente línea para ver qué ruta se está usando
-    # st.success(f"wkhtmltopdf encontrado en: {path}")
-    pass
+import weasyprint
+from database import init_supabase
 
 # -----------------------------------------------------------
 # PLANTILLA DE FACTURA
@@ -285,7 +260,7 @@ NIF: {{ client.tax_id }}<br>
 </html>"""
 
 # -----------------------------------------------------------
-# PLANTILLA DE PRESUPUESTO (con diseño similar a factura)
+# PLANTILLA DE PRESUPUESTO
 # -----------------------------------------------------------
 BUDGET_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="es">
@@ -496,14 +471,18 @@ def get_qr_base64(invoice, client):
     img.save(buffered, format="PNG")
     return base64.b64encode(buffered.getvalue()).decode()
 
+def _html_to_pdf(html_str):
+    """Convierte HTML a PDF usando WeasyPrint (nativo Python)."""
+    try:
+        return weasyprint.HTML(string=html_str).write_pdf()
+    except Exception as e:
+        st.error(f"Error generando PDF: {e}")
+        return None
+
 # -----------------------------------------------------------
 # Factura
 # -----------------------------------------------------------
 def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
-    if pdfkit_config is None:
-        st.error("No se puede generar el PDF porque no se encontró wkhtmltopdf.")
-        return None
-
     qr_base64 = get_qr_base64(invoice, client)
     template_html = company_config.get("codigo_html") or DEFAULT_TEMPLATE
     template_css = company_config.get("codigo_css") or ""
@@ -533,35 +512,12 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         qr_base64=qr_base64,
         lineas=lineas or []
     )
-
-    options = {
-        'page-size': 'A4',
-        'margin-top': '10mm',
-        'margin-right': '10mm',
-        'margin-bottom': '10mm',
-        'margin-left': '10mm',
-        'encoding': 'UTF-8',
-        'enable-local-file-access': None,
-        'print-media-type': None,
-        'no-stop-slow-scripts': None
-    }
-
-    try:
-        pdf_bytes = pdfkit.from_string(html_str, False, options=options, configuration=pdfkit_config)
-        return pdf_bytes
-    except Exception as e:
-        st.error(f"Error generando PDF: {e}")
-        return None
+    return _html_to_pdf(html_str)
 
 # -----------------------------------------------------------
 # Presupuesto
 # -----------------------------------------------------------
 def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_pct, budget_number=None):
-    if pdfkit_config is None:
-        st.error("No se puede generar el PDF porque no se encontró wkhtmltopdf.")
-        return None
-
-    from database import init_supabase
     supabase = init_supabase()
     user_id = company.get("user_id")
     custom_html, custom_css = "", ""
@@ -595,23 +551,4 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
         vat_pct=vat_pct or 0,
         budget_number=budget_number or "---"
     )
-
-    options = {
-        'page-size': 'A4',
-        'margin-top': '10mm',
-        'margin-right': '10mm',
-        'margin-bottom': '10mm',
-        'margin-left': '10mm',
-        'encoding': 'UTF-8',
-        'enable-local-file-access': None,
-        'print-media-type': None,
-        'no-stop-slow-scripts': None
-    }
-
-    try:
-        pdf_bytes = pdfkit.from_string(html_str, False, options=options, configuration=pdfkit_config)
-        return pdf_bytes
-    except Exception as e:
-        st.error(f"Error al generar PDF del presupuesto: {e}")
-        return None
-
+    return _html_to_pdf(html_str)
