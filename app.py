@@ -1,4 +1,3 @@
-
 # app.py
 import streamlit as st
 import pandas as pd
@@ -1293,7 +1292,7 @@ elif menu == "📊 Dashboards":
                 st.pyplot(fig)
 
 # ------------------------------------------------------------
-# PRESUPUESTOS
+# PRESUPUESTOS (con soporte de productos)
 # ------------------------------------------------------------
 elif menu == "📝 Presupuestos":
     st.title("📝 Presupuestos")
@@ -1321,6 +1320,8 @@ elif menu == "📝 Presupuestos":
     tab_nuevo, tab_historial = st.tabs(["Nuevo presupuesto", "Historial de presupuestos"])
     with tab_nuevo:
         clientes_df = get_clients(user_id)
+        productos_df = get_products(user_id)   # <- necesario para seleccionar productos
+
         modo_cliente = st.radio("Seleccionar cliente", ["Existente", "Nuevo (manual)"])
         if modo_cliente == "Existente":
             if clientes_df.empty:
@@ -1336,27 +1337,66 @@ elif menu == "📝 Presupuestos":
                 "address": st.text_input("Dirección")
             }
         st.markdown("---")
+
+        # Líneas del presupuesto (con soporte de productos)
         st.subheader("Líneas del presupuesto")
         num_lineas = st.number_input("Número de líneas", min_value=1, max_value=20, value=1, step=1)
         lineas = []
+        lista_productos = ["-- Manual --"]
+        if not productos_df.empty and "name" in productos_df.columns:
+            lista_productos += productos_df["name"].tolist()
+
         for i in range(int(num_lineas)):
-            cols = st.columns([3,2,2,2])
+            cols = st.columns([3, 2, 2, 2])
             with cols[0]:
-                desc = st.text_input(f"Descripción {i+1}", key=f"bud_desc_{i}")
+                prod_sel = st.selectbox(f"Producto {i+1}", lista_productos, key=f"bud_prod_{i}")
+                if prod_sel == "-- Manual --":
+                    desc_manual = st.text_input(f"Descripción {i+1}", value="", key=f"bud_desc_{i}")
+                else:
+                    desc_manual = prod_sel
             with cols[1]:
-                qty = st.number_input(f"Cantidad {i+1}", min_value=1.0, value=1.0, step=1.0, key=f"bud_qty_{i}")
+                cantidad = st.number_input(f"Cantidad {i+1}", min_value=1.0, value=1.0, step=1.0, key=f"bud_qty_{i}")
             with cols[2]:
-                precio = st.number_input(f"Precio ud. {i+1}", min_value=0.0, value=0.0, step=10.0, key=f"bud_price_{i}")
+                # Precio e impuestos: si producto seleccionado, tomamos valores por defecto pero permitimos edición
+                if prod_sel != "-- Manual --" and not productos_df.empty:
+                    prod_row = productos_df[productos_df["name"] == prod_sel]
+                    if not prod_row.empty:
+                        prod_row = prod_row.iloc[0]
+                        precio_default = prod_row["price"]
+                        vat_default = prod_row["default_vat_percentage"]
+                        irpf_default = prod_row["default_irpf_percentage"]
+                        st.text(f"Precio: {money(precio_default)}")
+                    else:
+                        precio_default = 0.0
+                        vat_default = 21.0
+                        irpf_default = -15.0
+                else:
+                    precio_default = 0.0
+                    vat_default = 21.0
+                    irpf_default = -15.0
+
+                precio = st.number_input(f"Precio ud. {i+1}", min_value=0.0, value=precio_default, step=10.0, key=f"bud_price_{i}")
+                vat = st.number_input(f"IVA % {i+1}", value=vat_default, step=1.0, key=f"bud_vat_{i}")
+                irpf = st.number_input(f"IRPF % {i+1}", value=irpf_default, step=1.0, key=f"bud_irpf_{i}")
+
             with cols[3]:
-                vat = st.number_input(f"IVA % {i+1}", value=21.0, step=1.0, key=f"bud_vat_{i}")
-                irpf = st.number_input(f"IRPF % {i+1}", value=-15.0, step=1.0, key=f"bud_irpf_{i}")
-            base_linea = qty * precio
-            vat_amount = base_linea * vat / 100
-            irpf_amount = base_linea * irpf / 100
-            total_linea = base_linea + vat_amount + irpf_amount
+                base_linea = cantidad * precio
+                vat_amount = base_linea * vat / 100
+                irpf_amount = base_linea * irpf / 100
+                total_linea = base_linea + vat_amount + irpf_amount
+                st.text(f"Total: {money(total_linea)}")
+
+            descripcion_linea = desc_manual if prod_sel == "-- Manual --" and desc_manual.strip() else (prod_sel if prod_sel != "-- Manual --" else f"Concepto manual {i+1}")
+            prod_id = None
+            if prod_sel != "-- Manual --" and not productos_df.empty:
+                matching = productos_df[productos_df["name"] == prod_sel]
+                if not matching.empty:
+                    prod_id = matching.iloc[0]["id"]
+
             lineas.append({
-                "description": desc,
-                "quantity": qty,
+                "product_id": prod_id,
+                "description": descripcion_linea,
+                "quantity": cantidad,
                 "unit_price": precio,
                 "base_amount": base_linea,
                 "vat_percentage": vat,
@@ -1365,6 +1405,7 @@ elif menu == "📝 Presupuestos":
                 "irpf_amount": irpf_amount,
                 "total": total_linea
             })
+
         if lineas:
             base_total = sum(l["base_amount"] for l in lineas)
             vat_total = sum(l["vat_amount"] for l in lineas)
@@ -1578,6 +1619,8 @@ elif menu == "⚙️ Configuración":
         pdf_bytes = make_invoice_pdf_from_template(ejemplo_invoice, ejemplo_client, ejemplo_company, ejemplo_lineas)
         if pdf_bytes:
             st.download_button("Descargar factura de prueba", pdf_bytes, "prueba_factura.pdf", "application/pdf")
+
+
 
 
 
