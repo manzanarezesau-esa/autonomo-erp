@@ -43,11 +43,30 @@ def get_bank_transactions(user_id):
 
 @st.cache_data(ttl=60)
 def get_recurring_invoices(user_id):
-    resp = refetch("recurring_invoices", "*, clients_v2(name)", user_id)
+    # Obtenemos las facturas recurrentes sin join implícito para evitar errores de relación en PostgREST
+    resp = refetch("recurring_invoices", "*", user_id)
     df = pd.DataFrame(resp.data) if resp.data else pd.DataFrame()
-    if not df.empty and "clients_v2" in df.columns:
-        df["client_name"] = df["clients_v2"].apply(lambda x: x["name"] if isinstance(x, dict) else "")
-        df.drop(columns=["clients_v2"], inplace=True)
+
+    if not df.empty:
+        # Obtenemos todos los clientes del usuario
+        clientes = get_clients(user_id)
+        if not clientes.empty and "client_id" in df.columns:
+            # Hacemos merge manual con los nombres de los clientes
+            df = df.merge(
+                clientes[["id", "name"]],
+                left_on="client_id",
+                right_on="id",
+                how="left",
+                suffixes=("", "_cliente")
+            )
+            # Renombramos la columna 'name' a 'client_name'
+            df.rename(columns={"name": "client_name"}, inplace=True)
+            # Eliminamos la columna auxiliar 'id' del cliente
+            df.drop(columns=["id_cliente"], inplace=True, errors="ignore")
+        else:
+            # Si no hay clientes, creamos columna vacía
+            df["client_name"] = ""
+
     return df
 
 @st.cache_data(ttl=60)
@@ -59,4 +78,5 @@ def get_budgets(user_id):
 def get_journal_entries(user_id):
     resp = refetch("journal_entries", "id, date, description", user_id)
     return pd.DataFrame(resp.data) if resp.data else pd.DataFrame()
+
 
