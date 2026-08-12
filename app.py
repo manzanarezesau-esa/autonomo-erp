@@ -328,7 +328,7 @@ elif menu == "📦 Productos":
         descripcion = st.text_area("Descripción")
         precio = st.number_input("Precio unitario", min_value=0.0, step=1.0)
         vat_default = st.number_input("IVA por defecto (%)", value=21.0, step=1.0)
-        irpf_default = st.number_input("IRPF por defecto (%)", value=0.0, step=1.0)   # IRPF por defecto 0
+        irpf_default = st.number_input("IRPF por defecto (%)", value=0.0, step=1.0)
         if st.form_submit_button("Guardar") and nombre:
             try:
                 supabase.table("products_v2").insert({
@@ -393,8 +393,8 @@ elif menu == "💰 Ventas":
                 num_auto = obtener_siguiente_numero_factura(user_id)
                 num = st.text_input("Nº Factura", value=num_auto)
                 fecha = st.date_input("Fecha", datetime.now())
-                mes = LISTA_MESES[fecha.month - 1]   # Mes automático
-                st.caption(f"📅 Mes: **{mes}**")     # Solo informativo
+                mes = LISTA_MESES[fecha.month - 1]
+                st.caption(f"📅 Mes: **{mes}**")
 
                 cli_nombre = st.selectbox("Cliente", clientes_df["name"].tolist())
                 cliente_row = clientes_df[clientes_df["name"] == cli_nombre].iloc[0]
@@ -422,7 +422,7 @@ elif menu == "💰 Ventas":
                                 prod_row = prod_row.iloc[0]
                                 precio = prod_row["price"]
                                 vat = prod_row["default_vat_percentage"]
-                                irpf = 0.0   # Forzamos 0
+                                irpf = 0.0
                                 st.text(f"Precio: {money(precio)}")
                             else:
                                 precio = st.number_input(f"Precio {i+1}", min_value=0.0, value=0.0, step=10.0, key=f"prec_{i}")
@@ -499,7 +499,7 @@ elif menu == "💰 Ventas":
                 num_auto = obtener_siguiente_numero_factura(user_id)
                 num = st.text_input("Nº Factura (nuevo)", value=num_auto)
                 fecha = st.date_input("Fecha", datetime.now())
-                mes = LISTA_MESES[fecha.month - 1]   # Mes automático
+                mes = LISTA_MESES[fecha.month - 1]
                 st.caption(f"📅 Mes: **{mes}**")
                 cliente_row = clientes_df[clientes_df["id"] == original["client_id"]].iloc[0]
                 st.text(f"Cliente: {cliente_row['name']}")
@@ -748,7 +748,7 @@ elif menu == "🛒 Compras":
             with st.form("add_expense", clear_on_submit=True):
                 num = st.text_input("Nº Factura Proveedor")
                 fecha = st.date_input("Fecha", datetime.now())
-                mes = LISTA_MESES[fecha.month - 1]   # Mes automático
+                mes = LISTA_MESES[fecha.month - 1]
                 st.caption(f"📅 Mes: **{mes}**")
                 prov_nombre = st.selectbox("Proveedor", options=proveedores_df["name"].tolist())
                 tipo_gasto = st.selectbox("Tipo de gasto", TIPOS_GASTO)
@@ -801,7 +801,7 @@ elif menu == "🛒 Compras":
             with st.form("edit_expense_form"):
                 num = st.text_input("Nº Factura Proveedor", value=datos.get("expense_number", ""))
                 fecha = st.date_input("Fecha", value=pd.to_datetime(datos.get("date", datetime.now())))
-                mes = LISTA_MESES[fecha.month - 1]   # Mes automático
+                mes = LISTA_MESES[fecha.month - 1]
                 st.caption(f"📅 Mes: **{mes}**")
                 prov_nombre = st.selectbox("Proveedor", options=proveedores_df["name"].tolist(), index=proveedores_df["name"].tolist().index(datos.get("provider_name", "")))
                 tipo_gasto = st.selectbox("Tipo de gasto", TIPOS_GASTO, index=TIPOS_GASTO.index(datos.get("expense_type", "Otros")))
@@ -1300,7 +1300,6 @@ elif menu == "📊 Dashboards":
 elif menu == "📝 Presupuestos":
     st.title("📝 Presupuestos")
 
-    # Cargar configuración de empresa (para el PDF)
     try:
         config_res = supabase.table("settings").select("*").eq("user_id", user_id).execute()
         if config_res.data:
@@ -1323,7 +1322,6 @@ elif menu == "📝 Presupuestos":
             "company_phone": "", "company_email": "", "company_logo": ""
         }
 
-    # Inicializar estados de edición
     if "editing_budget_id" not in st.session_state:
         st.session_state.editing_budget_id = None
     if "edit_budget_data" not in st.session_state:
@@ -1343,7 +1341,6 @@ elif menu == "📝 Presupuestos":
             index=0 if st.session_state.editing_budget_id is None else 1
         )
 
-        # Lógica para cargar datos si estamos editando
         if modo_edicion == "Editar presupuesto existente":
             budgets_df = get_budgets(user_id)
             if budgets_df.empty:
@@ -1375,7 +1372,6 @@ elif menu == "📝 Presupuestos":
             st.session_state.editing_budget_id = None
             st.session_state.edit_budget_data = None
 
-        # Datos iniciales del cliente y líneas
         if st.session_state.editing_budget_id and st.session_state.edit_budget_data:
             budget_data = st.session_state.edit_budget_data
             cliente_pre = {
@@ -1408,7 +1404,6 @@ elif menu == "📝 Presupuestos":
             modo_cliente_pre = "Existente"
             cliente_sel_pre = clientes_df["name"].tolist()[0] if not clientes_df.empty else None
 
-        # Selección de cliente
         st.subheader("Datos del cliente")
         modo_cliente = st.radio(
             "Seleccionar cliente",
@@ -1440,7 +1435,6 @@ elif menu == "📝 Presupuestos":
         st.markdown("---")
         fecha = st.date_input("Fecha del presupuesto", value=fecha_pre_dt, key="fecha_presupuesto")
 
-        # Líneas del presupuesto (IRPF 0 por defecto)
         st.subheader("Líneas del presupuesto")
         num_lineas = st.number_input(
             "Número de líneas",
@@ -1492,14 +1486,13 @@ elif menu == "📝 Presupuestos":
                     key=f"bud_qty_{i}"
                 )
             with cols[2]:
-                # Precio e impuestos - IRPF por defecto 0.00
                 if prod_sel != "-- Manual --" and not productos_df.empty:
                     prod_row = productos_df[productos_df["name"] == prod_sel]
                     if not prod_row.empty:
                         prod_row = prod_row.iloc[0]
                         precio_default = prod_row["price"]
                         vat_default = prod_row["default_vat_percentage"]
-                        irpf_default = 0.0   # Forzamos 0
+                        irpf_default = 0.0
                         st.text(f"Precio: {money(precio_default)}")
                     else:
                         precio_default = 0.0
@@ -1508,7 +1501,7 @@ elif menu == "📝 Presupuestos":
                 else:
                     precio_default = float(lin_pre["unit_price"]) if lin_pre else 0.0
                     vat_default = float(lin_pre.get("vat_percentage", 21)) if lin_pre else 21.0
-                    irpf_default = 0.0   # Siempre 0 por defecto
+                    irpf_default = 0.0
 
                 precio = st.number_input(
                     f"Precio ud. {i+1}",
@@ -1558,7 +1551,6 @@ elif menu == "📝 Presupuestos":
                 "total": total_linea
             })
 
-        # Totales
         if lineas:
             base_total = sum(l["base_amount"] for l in lineas)
             vat_total = sum(l["vat_amount"] for l in lineas)
@@ -1567,7 +1559,6 @@ elif menu == "📝 Presupuestos":
         else:
             base_total = vat_total = irpf_total = total = 0.0
 
-        # Vista previa dinámica
         st.markdown("---")
         st.subheader("🔍 Vista previa del presupuesto")
         with st.container(border=True):
@@ -1606,7 +1597,6 @@ elif menu == "📝 Presupuestos":
             with col_tot2:
                 st.markdown(f"### **TOTAL: {money(total)}**")
 
-        # Botones de acción
         st.markdown("---")
         col_acc1, col_acc2, col_acc3 = st.columns(3)
 
@@ -1713,7 +1703,6 @@ elif menu == "📝 Presupuestos":
                     st.session_state.edit_budget_data = None
                     st.rerun()
 
-    # Pestaña de Historial
     with tab_historial:
         st.subheader("Presupuestos guardados")
         budgets_df = get_budgets(user_id)
@@ -1793,7 +1782,7 @@ elif menu == "👥 Colaboradores":
     st.info("Funcionalidad en desarrollo.")
 
 # ------------------------------------------------------------
-# CONFIGURACIÓN
+# CONFIGURACIÓN (con botón explícito "Guardar datos fiscales")
 # ------------------------------------------------------------
 elif menu == "⚙️ Configuración":
     st.title("Configuración de empresa y plantillas")
@@ -1838,7 +1827,7 @@ elif menu == "⚙️ Configuración":
         budget_html = st.text_area("Código HTML (budget_html)", value=budget_html, height=300)
         budget_css = st.text_area("Código CSS (budget_css) - opcional", value=budget_css, height=100)
 
-        if st.form_submit_button("Guardar configuración"):
+        if st.form_submit_button("Guardar datos fiscales"):
             tax_val = (tax_id or "").strip()
             if tax_val and not validar_nif_cif(tax_val):
                 st.error("El NIF/CIF de la empresa no es válido. Revíselo.")
@@ -1864,7 +1853,7 @@ elif menu == "⚙️ Configuración":
                     }
                     try:
                         supabase.table("settings").upsert(data, on_conflict="user_id").execute()
-                        st.success("Configuración guardada")
+                        st.success("Datos fiscales actualizados correctamente")
                         st.rerun()
                     except Exception as e:
                         st.error(f"Error al guardar configuración: {e}")
@@ -1889,6 +1878,7 @@ elif menu == "⚙️ Configuración":
         pdf_bytes = make_invoice_pdf_from_template(ejemplo_invoice, ejemplo_client, ejemplo_company, ejemplo_lineas)
         if pdf_bytes:
             st.download_button("Descargar factura de prueba", pdf_bytes, "prueba_factura.pdf", "application/pdf")
+
 
 
 
