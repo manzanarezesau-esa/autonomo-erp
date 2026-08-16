@@ -325,6 +325,15 @@ elif menu == "📦 Productos":
     st.title("Catálogo de Productos / Servicios")
     productos_df = get_products(user_id)
 
+    # Asegurar que existan las columnas necesarias
+    if not productos_df.empty:
+        for col in ["description", "price", "default_vat_percentage", "default_irpf_percentage"]:
+            if col not in productos_df.columns:
+                if col == "description":
+                    productos_df[col] = ""
+                else:
+                    productos_df[col] = 0.0
+
     tab_add, tab_edit, tab_del = st.tabs(["Añadir nuevo", "Editar existente", "Eliminar"])
 
     # ---------------- TAB AÑADIR NUEVO ----------------
@@ -370,9 +379,9 @@ elif menu == "📦 Productos":
             with st.form("edit_product_form"):
                 nuevo_nombre = st.text_input("Nombre", value=prod_row["name"])
                 nueva_descripcion = st.text_area("Descripción", value=prod_row.get("description", ""))
-                nuevo_precio = st.number_input("Precio unitario", min_value=0.0, value=float(prod_row["price"]), step=1.0)
-                nuevo_vat = st.number_input("IVA por defecto (%)", value=float(prod_row["default_vat_percentage"]), step=1.0)
-                nuevo_irpf = st.number_input("IRPF por defecto (%)", value=float(prod_row["default_irpf_percentage"]), step=1.0)
+                nuevo_precio = st.number_input("Precio unitario", min_value=0.0, value=float(prod_row.get("price", 0.0)), step=1.0)
+                nuevo_vat = st.number_input("IVA por defecto (%)", value=float(prod_row.get("default_vat_percentage", 21.0)), step=1.0)
+                nuevo_irpf = st.number_input("IRPF por defecto (%)", value=float(prod_row.get("default_irpf_percentage", 0.0)), step=1.0)
 
                 if st.form_submit_button("Guardar cambios"):
                     if nuevo_nombre:
@@ -967,7 +976,7 @@ elif menu == "🛒 Compras":
                         st.error(f"Error al eliminar gasto: {e}")
 
 # ------------------------------------------------------------
-# FACTURACIÓN RECURRENTE (sin cambios)
+# FACTURACIÓN RECURRENTE
 # ------------------------------------------------------------
 elif menu == "🔄 Facturación recurrente":
     st.title("Facturación recurrente")
@@ -1415,6 +1424,12 @@ elif menu == "📝 Presupuestos":
         clientes_df = get_clients(user_id)
         productos_df = get_products(user_id)
 
+        # Asegurar columnas
+        if not productos_df.empty:
+            for col in ["description", "price", "default_vat_percentage", "default_irpf_percentage"]:
+                if col not in productos_df.columns:
+                    productos_df[col] = "" if col == "description" else 0.0
+
         modo_edicion = st.radio(
             "Modo de trabajo",
             ["Crear nuevo presupuesto", "Editar presupuesto existente"],
@@ -1554,13 +1569,16 @@ elif menu == "📝 Presupuestos":
                 if prod_sel == "-- Manual --":
                     desc_manual = st.text_input(
                         f"Descripción {i+1}",
-                        value=lin_pre["description"] if lin_pre else "",
+                        value=lin_pre.get("description", "") if lin_pre else "",
                         key=f"bud_desc_{i}"
                     )
                 else:
-                    # Cargar descripción desde BD y permitir edición
+                    # Cargar descripción desde BD de forma segura
                     prod_info = productos_df[productos_df["name"] == prod_sel]
                     if not prod_info.empty:
+                        # Aseguramos que la columna 'description' exista en el DataFrame
+                        if 'description' not in prod_info.columns:
+                            prod_info['description'] = ""
                         descripcion_producto = prod_info.iloc[0].get("description", "")
                     else:
                         descripcion_producto = ""
@@ -1622,7 +1640,7 @@ elif menu == "📝 Presupuestos":
                 total_linea = base_linea + vat_amount + irpf_amount
                 st.text(f"Total: {money(total_linea)}")
 
-            # Construir la descripción final: nombre + descripción larga con salto de línea
+            # Construir la descripción final
             if prod_sel != "-- Manual --" and desc_manual.strip():
                 descripcion_linea = f"{prod_sel}\n{desc_manual.strip()}"
             elif prod_sel == "-- Manual --" and desc_manual.strip():
@@ -1976,6 +1994,7 @@ elif menu == "⚙️ Configuración":
         pdf_bytes = make_invoice_pdf_from_template(ejemplo_invoice, ejemplo_client, ejemplo_company, ejemplo_lineas)
         if pdf_bytes:
             st.download_button("Descargar factura de prueba", pdf_bytes, "prueba_factura.pdf", "application/pdf")
+
 
            
 
