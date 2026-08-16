@@ -319,32 +319,114 @@ elif menu == "🤝 Proveedores":
     st.dataframe(df, width='stretch')
 
 # ------------------------------------------------------------
-# PRODUCTOS
+# PRODUCTOS (con añadir, editar y eliminar)
 # ------------------------------------------------------------
 elif menu == "📦 Productos":
     st.title("Catálogo de Productos / Servicios")
-    with st.form("add_product", clear_on_submit=True):
-        nombre = st.text_input("Nombre")
-        descripcion = st.text_area("Descripción")
-        precio = st.number_input("Precio unitario", min_value=0.0, step=1.0)
-        vat_default = st.number_input("IVA por defecto (%)", value=21.0, step=1.0)
-        irpf_default = st.number_input("IRPF por defecto (%)", value=0.0, step=1.0)
-        if st.form_submit_button("Guardar") and nombre:
-            try:
-                supabase.table("products_v2").insert({
-                    "user_id": user_id,
-                    "name": nombre.strip(),
-                    "description": descripcion.strip(),
-                    "price": precio,
-                    "default_vat_percentage": vat_default,
-                    "default_irpf_percentage": irpf_default
-                }).execute()
-                st.success("Producto guardado")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error al guardar producto: {e}")
-    df = get_products(user_id)
-    st.dataframe(df, width='stretch')
+    productos_df = get_products(user_id)
+
+    tab_add, tab_edit, tab_del = st.tabs(["Añadir nuevo", "Editar existente", "Eliminar"])
+
+    # ---------------- TAB AÑADIR NUEVO ----------------
+    with tab_add:
+        with st.form("add_product", clear_on_submit=True):
+            nombre = st.text_input("Nombre")
+            descripcion = st.text_area("Descripción")
+            precio = st.number_input("Precio unitario", min_value=0.0, step=1.0)
+            vat_default = st.number_input("IVA por defecto (%)", value=21.0, step=1.0)
+            irpf_default = st.number_input("IRPF por defecto (%)", value=0.0, step=1.0)
+            if st.form_submit_button("Guardar nuevo producto"):
+                if nombre:
+                    try:
+                        supabase.table("products_v2").insert({
+                            "user_id": user_id,
+                            "name": nombre.strip(),
+                            "description": descripcion.strip(),
+                            "price": precio,
+                            "default_vat_percentage": vat_default,
+                            "default_irpf_percentage": irpf_default
+                        }).execute()
+                        st.success("Producto guardado correctamente")
+                        st.cache_data.clear()
+                        time.sleep(0.5)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error al guardar producto: {e}")
+                else:
+                    st.error("El nombre es obligatorio.")
+
+    # ---------------- TAB EDITAR EXISTENTE ----------------
+    with tab_edit:
+        if productos_df.empty:
+            st.info("No hay productos registrados para editar.")
+        else:
+            prod_sel = st.selectbox(
+                "Selecciona un producto/servicio",
+                productos_df["name"].tolist(),
+                key="edit_prod_select"
+            )
+            prod_row = productos_df[productos_df["name"] == prod_sel].iloc[0]
+
+            with st.form("edit_product_form"):
+                nuevo_nombre = st.text_input("Nombre", value=prod_row["name"])
+                nueva_descripcion = st.text_area("Descripción", value=prod_row.get("description", ""))
+                nuevo_precio = st.number_input("Precio unitario", min_value=0.0, value=float(prod_row["price"]), step=1.0)
+                nuevo_vat = st.number_input("IVA por defecto (%)", value=float(prod_row["default_vat_percentage"]), step=1.0)
+                nuevo_irpf = st.number_input("IRPF por defecto (%)", value=float(prod_row["default_irpf_percentage"]), step=1.0)
+
+                if st.form_submit_button("Guardar cambios"):
+                    if nuevo_nombre:
+                        try:
+                            supabase.table("products_v2").update({
+                                "name": nuevo_nombre.strip(),
+                                "description": nueva_descripcion.strip(),
+                                "price": nuevo_precio,
+                                "default_vat_percentage": nuevo_vat,
+                                "default_irpf_percentage": nuevo_irpf
+                            }).eq("id", prod_row["id"]).execute()
+                            st.success("Producto actualizado correctamente")
+                            st.cache_data.clear()
+                            time.sleep(0.5)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error al actualizar producto: {e}")
+                    else:
+                        st.error("El nombre es obligatorio.")
+
+    # ---------------- TAB ELIMINAR ----------------
+    with tab_del:
+        if productos_df.empty:
+            st.info("No hay productos registrados para eliminar.")
+        else:
+            prod_del = st.selectbox(
+                "Selecciona un producto/servicio a eliminar",
+                productos_df["name"].tolist(),
+                key="del_prod_select"
+            )
+            prod_row_del = productos_df[productos_df["name"] == prod_del].iloc[0]
+
+            st.warning(f"⚠️ Vas a eliminar el producto: **{prod_del}**")
+            if st.button("🗑️ Eliminar definitivamente", key="delete_product_btn"):
+                confirmado = st.checkbox("Confirmo que deseo eliminar este producto", key="confirm_delete_product")
+                if confirmado:
+                    try:
+                        supabase.table("products_v2").delete().eq("id", prod_row_del["id"]).execute()
+                        st.success("Producto eliminado correctamente")
+                        st.cache_data.clear()
+                        time.sleep(0.5)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error al eliminar producto: {e}")
+                else:
+                    st.error("Debes marcar la casilla de confirmación para eliminar.")
+
+    # Mostrar catálogo actual
+    st.markdown("---")
+    st.subheader("Catálogo actual")
+    if not productos_df.empty:
+        st.dataframe(productos_df[["name", "description", "price", "default_vat_percentage", "default_irpf_percentage"]], width='stretch')
+    else:
+        st.info("No hay productos en el catálogo.")
 
 # ------------------------------------------------------------
 # VENTAS (con mes automático e IRPF 0)
@@ -885,7 +967,7 @@ elif menu == "🛒 Compras":
                         st.error(f"Error al eliminar gasto: {e}")
 
 # ------------------------------------------------------------
-# FACTURACIÓN RECURRENTE
+# FACTURACIÓN RECURRENTE (sin cambios)
 # ------------------------------------------------------------
 elif menu == "🔄 Facturación recurrente":
     st.title("Facturación recurrente")
@@ -1295,7 +1377,7 @@ elif menu == "📊 Dashboards":
                 st.pyplot(fig)
 
 # ------------------------------------------------------------
-# PRESUPUESTOS (con edición, vista previa e IRPF 0)
+# PRESUPUESTOS (con edición, vista previa, descripciones e IRPF 0)
 # ------------------------------------------------------------
 elif menu == "📝 Presupuestos":
     st.title("📝 Presupuestos")
@@ -1476,7 +1558,18 @@ elif menu == "📝 Presupuestos":
                         key=f"bud_desc_{i}"
                     )
                 else:
-                    desc_manual = prod_sel
+                    # Cargar descripción desde BD y permitir edición
+                    prod_info = productos_df[productos_df["name"] == prod_sel]
+                    if not prod_info.empty:
+                        descripcion_producto = prod_info.iloc[0].get("description", "")
+                    else:
+                        descripcion_producto = ""
+                    desc_manual = st.text_area(
+                        f"Descripción {i+1} (editable)",
+                        value=descripcion_producto or "",
+                        key=f"bud_desc_{i}",
+                        height=80
+                    )
             with cols[1]:
                 cantidad = st.number_input(
                     f"Cantidad {i+1}",
@@ -1529,9 +1622,14 @@ elif menu == "📝 Presupuestos":
                 total_linea = base_linea + vat_amount + irpf_amount
                 st.text(f"Total: {money(total_linea)}")
 
-            descripcion_linea = desc_manual if prod_sel == "-- Manual --" and desc_manual.strip() else (
-                prod_sel if prod_sel != "-- Manual --" else f"Concepto manual {i+1}"
-            )
+            # Construir la descripción final: nombre + descripción larga con salto de línea
+            if prod_sel != "-- Manual --" and desc_manual.strip():
+                descripcion_linea = f"{prod_sel}\n{desc_manual.strip()}"
+            elif prod_sel == "-- Manual --" and desc_manual.strip():
+                descripcion_linea = desc_manual.strip()
+            else:
+                descripcion_linea = prod_sel if prod_sel != "-- Manual --" else f"Concepto manual {i+1}"
+
             prod_id = None
             if prod_sel != "-- Manual --" and not productos_df.empty:
                 matching = productos_df[productos_df["name"] == prod_sel]
@@ -1879,6 +1977,7 @@ elif menu == "⚙️ Configuración":
         if pdf_bytes:
             st.download_button("Descargar factura de prueba", pdf_bytes, "prueba_factura.pdf", "application/pdf")
 
+           
 
 
 
