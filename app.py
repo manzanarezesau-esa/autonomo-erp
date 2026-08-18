@@ -761,7 +761,7 @@ elif menu == "📦 Productos":
         st.info("No hay productos en el catálogo.")
 
 # ------------------------------------------------------------
-# VENTAS (con selección nativa)
+# VENTAS (con selección nativa, XML firmado y Veri*Factu)
 # ------------------------------------------------------------
 elif menu == "💰 Ventas":
     st.title("Facturas de Venta")
@@ -1118,7 +1118,23 @@ elif menu == "💰 Ventas":
                 
                 if st.button("📄 Descargar XML FacturaE", key=f"xml_{fact_id}"):
                     from facturae_utils import generar_facturae_xml
-                    xml_str = generar_facturae_xml(factura_row, cliente, company_config, lineas_fact_list)
+                    from firma_xades import cargar_certificado_desde_secrets
+                    
+                    certificado, password = cargar_certificado_desde_secrets()
+                    
+                    if certificado and password:
+                        xml_str = generar_facturae_xml(
+                            factura_row, cliente, company_config, lineas_fact_list,
+                            firmar=True, certificado=certificado, password=password
+                        )
+                        st.success("XML firmado con XAdES-EPES")
+                    else:
+                        xml_str = generar_facturae_xml(
+                            factura_row, cliente, company_config, lineas_fact_list,
+                            firmar=False
+                        )
+                        st.warning("XML sin firma (no hay certificado configurado)")
+                    
                     st.download_button(
                         "Descargar XML",
                         xml_str.encode('utf-8'),
@@ -1787,7 +1803,7 @@ elif menu == "📊 Dashboards":
                 st.pyplot(fig)
 
 # ------------------------------------------------------------
-# PRESUPUESTOS (con selección nativa y envío por email corregido)
+# PRESUPUESTOS (con selección nativa y envío por email)
 # ------------------------------------------------------------
 elif menu == "📝 Presupuestos":
     st.title("📝 Presupuestos")
@@ -1821,7 +1837,6 @@ elif menu == "📝 Presupuestos":
 
     tab_nuevo, tab_historial = st.tabs(["Nuevo / Editar presupuesto", "Historial de presupuestos"])
 
-    # ============ PESTAÑA NUEVO/EDITAR ============
     with tab_nuevo:
         clientes_df = get_clients(user_id)
         productos_df = get_products(user_id)
@@ -2239,7 +2254,7 @@ elif menu == "📝 Presupuestos":
                     st.session_state.edit_budget_data = None
                     st.rerun()
 
-    # ============ PESTAÑA HISTORIAL (con selección nativa y envío por email corregido) ============
+    # ============ PESTAÑA HISTORIAL ============
     with tab_historial:
         st.subheader("Presupuestos guardados")
         budgets_df = get_budgets(user_id)
@@ -2273,7 +2288,6 @@ elif menu == "📝 Presupuestos":
                 budget_row = budgets_df.iloc[selected_row]
                 budget_id = budget_row["id"]
                 
-                # Obtener datos completos del presupuesto desde Supabase
                 try:
                     resp = supabase.table("budgets").select("*").eq("id", budget_id).single().execute()
                     if resp.data:
@@ -2289,7 +2303,6 @@ elif menu == "📝 Presupuestos":
                 st.write(f"**Fecha:** {budget_data.get('date', '')}")
                 st.write(f"**Total:** {money(budget_data.get('total', 0))}")
                 
-                # Cargar líneas del presupuesto
                 try:
                     lineas_db = json.loads(budget_data.get("lines", "[]"))
                     if lineas_db:
@@ -2297,7 +2310,6 @@ elif menu == "📝 Presupuestos":
                 except Exception:
                     lineas_db = []
 
-                # Preparar datos del cliente para el PDF
                 client_d = {
                     "name": budget_data.get("client_name", ""),
                     "tax_id": budget_data.get("client_tax_id", ""),
