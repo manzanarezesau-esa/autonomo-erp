@@ -1787,7 +1787,7 @@ elif menu == "📊 Dashboards":
                 st.pyplot(fig)
 
 # ------------------------------------------------------------
-# PRESUPUESTOS (con selección nativa y envío por email)
+# PRESUPUESTOS (con selección nativa y envío por email corregido)
 # ------------------------------------------------------------
 elif menu == "📝 Presupuestos":
     st.title("📝 Presupuestos")
@@ -2208,19 +2208,27 @@ elif menu == "📝 Presupuestos":
                                 key="download_pdf"
                             )
                             
-                            destinatario = st.text_input("Email para enviar presupuesto", key="email_presupuesto_nuevo")
+                            destinatario = st.text_input(
+                                "Email para enviar presupuesto",
+                                key="email_presupuesto_nuevo",
+                                placeholder="cliente@ejemplo.com"
+                            )
                             if st.button("📧 Enviar presupuesto por email", key="send_budget_email_nuevo"):
-                                exito = enviar_factura_email(
-                                    destinatario,
-                                    f"Presupuesto {temp_budget_number}",
-                                    "Adjunto le enviamos el presupuesto solicitado.",
-                                    pdf_bytes,
-                                    f"Presupuesto_{temp_budget_number}.pdf"
-                                )
-                                if exito:
-                                    st.success("Presupuesto enviado correctamente")
+                                if not destinatario or "@" not in destinatario:
+                                    st.error("Introduce un email válido.")
                                 else:
-                                    st.error("No se pudo enviar el email")
+                                    with st.spinner("Enviando email..."):
+                                        exito = enviar_factura_email(
+                                            destinatario,
+                                            f"Presupuesto {temp_budget_number}",
+                                            "Adjunto le enviamos el presupuesto solicitado.",
+                                            pdf_bytes,
+                                            f"Presupuesto_{temp_budget_number}.pdf"
+                                        )
+                                    if exito:
+                                        st.success("Presupuesto enviado correctamente")
+                                    else:
+                                        st.error("No se pudo enviar el email")
                     else:
                         st.error("Faltan datos para generar el presupuesto.")
 
@@ -2231,7 +2239,7 @@ elif menu == "📝 Presupuestos":
                     st.session_state.edit_budget_data = None
                     st.rerun()
 
-    # ============ PESTAÑA HISTORIAL (con selección nativa y envío por email) ============
+    # ============ PESTAÑA HISTORIAL (con selección nativa y envío por email corregido) ============
     with tab_historial:
         st.subheader("Presupuestos guardados")
         budgets_df = get_budgets(user_id)
@@ -2309,37 +2317,53 @@ elif menu == "📝 Presupuestos":
                             st.error("Faltan datos para generar el presupuesto.")
                 
                 with col2:
-                    if st.button("📧 Enviar por email", key=f"email_{budget_id}"):
-                        empresa["user_id"] = user_id
-                        client_d = {
-                            "name": budget_data.get("client_name", ""),
-                            "tax_id": budget_data.get("client_tax_id", ""),
-                            "address": budget_data.get("client_address", "")
-                        }
-                        lineas_db = json.loads(budget_data.get("lines", "[]"))
-                        if empresa and client_d and lineas_db:
-                            pdf_bytes = make_budget_pdf(
-                                empresa, client_d, lineas_db,
-                                budget_data["base_total"], budget_data["vat_total"],
-                                budget_data["total"], budget_data["vat_pct"],
-                                budget_number=budget_data.get("budget_number", "---")
-                            )
-                            if pdf_bytes:
-                                destinatario = st.text_input("Email del cliente", key=f"email_dest_{budget_id}")
-                                if st.button("Enviar ahora", key=f"send_{budget_id}"):
-                                    exito = enviar_factura_email(
-                                        destinatario,
-                                        f"Presupuesto {budget_data['budget_number']}",
-                                        "Adjunto le enviamos el presupuesto solicitado.",
-                                        pdf_bytes,
-                                        f"Presupuesto_{budget_data['budget_number']}.pdf"
+                    # Botón para mostrar campo de email
+                    if st.button("📧 Enviar por email", key=f"email_btn_{budget_id}"):
+                        st.session_state[f"show_email_{budget_id}"] = True
+                    
+                    # Si se ha pulsado el botón, mostrar campo de email y botón de envío
+                    if st.session_state.get(f"show_email_{budget_id}", False):
+                        destinatario = st.text_input(
+                            "Email del destinatario",
+                            key=f"email_dest_{budget_id}",
+                            placeholder="cliente@ejemplo.com"
+                        )
+                        if st.button("✅ Enviar ahora", key=f"send_{budget_id}"):
+                            if not destinatario or "@" not in destinatario:
+                                st.error("Introduce un email válido.")
+                            else:
+                                empresa["user_id"] = user_id
+                                client_d = {
+                                    "name": budget_data.get("client_name", ""),
+                                    "tax_id": budget_data.get("client_tax_id", ""),
+                                    "address": budget_data.get("client_address", "")
+                                }
+                                lineas_db = json.loads(budget_data.get("lines", "[]"))
+                                if empresa and client_d and lineas_db:
+                                    pdf_bytes = make_budget_pdf(
+                                        empresa, client_d, lineas_db,
+                                        budget_data["base_total"], budget_data["vat_total"],
+                                        budget_data["total"], budget_data["vat_pct"],
+                                        budget_number=budget_data.get("budget_number", "---")
                                     )
-                                    if exito:
-                                        st.success("Presupuesto enviado correctamente")
-                                    else:
-                                        st.error("No se pudo enviar el email")
-                        else:
-                            st.error("Faltan datos para generar el presupuesto.")
+                                    if pdf_bytes:
+                                        with st.spinner("Enviando email..."):
+                                            exito = enviar_factura_email(
+                                                destinatario,
+                                                f"Presupuesto {budget_data['budget_number']}",
+                                                "Adjunto le enviamos el presupuesto solicitado.",
+                                                pdf_bytes,
+                                                f"Presupuesto_{budget_data['budget_number']}.pdf"
+                                            )
+                                        if exito:
+                                            st.success("Presupuesto enviado correctamente")
+                                            st.session_state[f"show_email_{budget_id}"] = False
+                                            time.sleep(1)
+                                            st.rerun()
+                                        else:
+                                            st.error("No se pudo enviar el email")
+                                else:
+                                    st.error("Faltan datos para generar el presupuesto.")
                 
                 with col3:
                     if st.button("✏️ Editar", key=f"edit_{budget_id}"):
