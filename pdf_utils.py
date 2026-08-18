@@ -10,7 +10,7 @@ import weasyprint
 from database import init_supabase
 
 # -----------------------------------------------------------
-# PLANTILLA DE FACTURA (sin cambios)
+# PLANTILLA DE FACTURA (con leyenda Veri*Factu)
 # -----------------------------------------------------------
 DEFAULT_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="es">
@@ -169,6 +169,12 @@ td.amount {
     margin-bottom: 15px;
     font-weight: bold;
 }
+.verifactu-leyenda {
+    text-align: center;
+    margin-top: 15px;
+    font-size: 9px;
+    color: #4a5568;
+}
 </style>
 </head>
 <body>
@@ -253,15 +259,18 @@ NIF: {{ client.tax_id }}<br>
 <span>Factura generada electrónicamente · Gracias por su confianza</span>
 {% if qr_base64 %}
 <div class="qr-code">
-<img src="data:image/png;base64,{{ qr_base64 }}" alt="QR">
+<img src="data:image/png;base64,{{ qr_base64 }}" alt="QR VeriFactu">
 </div>
 {% endif %}
+</div>
+<div class="verifactu-leyenda">
+Sistema de facturación verificable / VERI*FACTU - Factura verificable en la sede electrónica de la AEAT
 </div>
 </body>
 </html>"""
 
 # -----------------------------------------------------------
-# PLANTILLA DE PRESUPUESTO (mejorada – diseño técnico limpio)
+# PLANTILLA DE PRESUPUESTO (sin cambios)
 # -----------------------------------------------------------
 BUDGET_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="es">
@@ -328,8 +337,6 @@ body {
     display: block;
     margin-bottom: 5px;
 }
-
-/* ----- Estilos para los bloques de partidas ----- */
 .item-block {
     page-break-inside: avoid;
     margin-bottom: 25px;
@@ -381,7 +388,6 @@ body {
     font-weight: 700;
     color: #1e3a8a;
 }
-
 .totals {
     width: 40%;
     margin-left: auto;
@@ -438,7 +444,6 @@ NIF: {{ client.tax_id }}<br>
 {{ client.address }}
 </div>
 
-<!-- Lista de conceptos / partidas -->
 {% for item in lineas %}
 <div class="item-block">
     <div class="item-title">{{ item.title }}</div>
@@ -484,8 +489,17 @@ def _logo_sanitized(url):
         return ""
     return url
 
-def get_qr_base64(invoice, client):
-    qr_data = f"Factura: {invoice.get('invoice_number','')}\nFecha: {invoice.get('date','')}\nTotal: {invoice.get('total',0):.2f} EUR\nNIF: {client.get('tax_id','')}"
+def get_qr_base64(invoice, client, company_config):
+    """Genera QR con URL de cotejo AEAT Veri*Factu."""
+    base_url = "https://www.agenciatributaria.gob.es/verifactu"
+    params = (
+        f"?nif={company_config.get('company_tax_id','')}"
+        f"&num={invoice.get('invoice_number','')}"
+        f"&fecha={invoice.get('date','')}"
+        f"&total={invoice.get('total',0):.2f}"
+        f"&hash={invoice.get('hash','')}"
+    )
+    qr_data = base_url + params
     qr = qrcode.QRCode(box_size=4, border=1)
     qr.add_data(qr_data)
     qr.make(fit=True)
@@ -495,7 +509,7 @@ def get_qr_base64(invoice, client):
     return base64.b64encode(buffered.getvalue()).decode()
 
 def _html_to_pdf(html_str):
-    """Convierte HTML a PDF usando WeasyPrint (nativo Python)."""
+    """Convierte HTML a PDF usando WeasyPrint."""
     try:
         return weasyprint.HTML(string=html_str).write_pdf()
     except Exception as e:
@@ -503,40 +517,30 @@ def _html_to_pdf(html_str):
         return None
 
 def _process_description(desc_text):
-    """
-    Convierte un texto con viñetas (•) y saltos de línea en HTML semántico.
-    - Las líneas que empiezan con '•' o '-' se convierten en una lista <ul>.
-    - Los párrafos separados por doble salto de línea se envuelven en <p>.
-    - Se respeta el interlineado y márgenes mediante CSS (ya en plantilla).
-    """
+    """Convierte texto con viñetas en HTML semántico."""
     if not desc_text:
         return ""
-    # Dividir en bloques de párrafo (separados por al menos una línea en blanco)
     paragraphs = re.split(r'\n\s*\n', desc_text.strip())
     html_parts = []
     for para in paragraphs:
         lines = para.split('\n')
-        # Si todas las líneas empiezan con viñeta, las tratamos como lista
         if all(re.match(r'^\s*[•-]\s', line) for line in lines if line.strip()):
             ul_items = []
             for line in lines:
                 if line.strip():
-                    # Quitamos el bullet y espacios iniciales
                     content = re.sub(r'^\s*[•-]\s*', '', line)
                     ul_items.append(f'<li>{content}</li>')
             html_parts.append('<ul>' + ''.join(ul_items) + '</ul>')
         else:
-            # Es un párrafo normal (puede contener saltos de línea simples)
-            # Reemplazamos los saltos de línea por <br> para respetar el formato
             text_with_br = '<br>'.join(lines)
             html_parts.append(f'<p>{text_with_br}</p>')
     return ''.join(html_parts)
 
 # -----------------------------------------------------------
-# Factura (sin cambios en lógica, solo usa WeasyPrint)
+# Factura
 # -----------------------------------------------------------
 def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
-    qr_base64 = get_qr_base64(invoice, client)
+    qr_base64 = get_qr_base64(invoice, client, company_config)
     template_html = company_config.get("codigo_html") or DEFAULT_TEMPLATE
     template_css = company_config.get("codigo_css") or ""
 
@@ -547,7 +551,6 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
     company_safe.setdefault("es_rectificativa", False)
     company_safe.setdefault("factura_original_num", None)
 
-    # Inyectar CSS personalizado si existe
     if template_css.strip():
         if "<head" in template_html.lower():
             head_idx = template_html.lower().find("<head")
@@ -568,7 +571,7 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
     return _html_to_pdf(html_str)
 
 # -----------------------------------------------------------
-# Presupuesto (con procesamiento de descripciones)
+# Presupuesto
 # -----------------------------------------------------------
 def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_pct, budget_number=None):
     supabase = init_supabase()
@@ -593,11 +596,9 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
         else:
             template_html = f"<style>{custom_css}</style>\n" + template_html
 
-    # Procesar cada línea para extraer título y descripción HTML
     enriched_lineas = []
     for linea in lineas:
         desc = linea.get("description", "")
-        # Si hay salto de línea, la primera línea es el título
         if '\n' in desc:
             lines = desc.split('\n', 1)
             title = lines[0].strip()
@@ -607,7 +608,7 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
             rest = ""
         desc_html = _process_description(rest) if rest else ""
         new_item = linea.copy()
-        new_item["title"] = title.upper()  # Forzamos mayúsculas
+        new_item["title"] = title.upper()
         new_item["description_html"] = desc_html
         enriched_lineas.append(new_item)
 
@@ -623,4 +624,3 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
         budget_number=budget_number or "---"
     )
     return _html_to_pdf(html_str)
-
