@@ -8,6 +8,7 @@ from jinja2 import Template
 import streamlit as st
 import weasyprint
 from database import init_supabase
+from verifactu_utils import generar_qr_verifactu
 
 # -----------------------------------------------------------
 # PLANTILLA DE FACTURA (con leyenda Veri*Factu)
@@ -490,16 +491,30 @@ def _logo_sanitized(url):
     return url
 
 def get_qr_base64(invoice, client, company_config):
-    """Genera QR con URL de cotejo AEAT Veri*Factu."""
-    base_url = "https://www.agenciatributaria.gob.es/verifactu"
-    params = (
-        f"?nif={company_config.get('company_tax_id','')}"
-        f"&num={invoice.get('invoice_number','')}"
-        f"&fecha={invoice.get('date','')}"
-        f"&total={invoice.get('total',0):.2f}"
-        f"&hash={invoice.get('hash','')}"
+    """Genera QR Veri*Factu con formato exacto de la AEAT."""
+    invoice_number = invoice.get('invoice_number', '')
+    if '-' in invoice_number:
+        parts = invoice_number.split('-')
+        serie = parts[0] if len(parts) > 1 else "0"
+        numero = parts[-1]
+    else:
+        serie = "0"
+        numero = invoice_number
+    
+    nif_emisor = company_config.get('company_tax_id', '')
+    fecha = invoice.get('date', '')
+    importe_total = invoice.get('total', 0)
+    hash_factura = invoice.get('hash', '')
+    
+    qr_data = generar_qr_verifactu(
+        nif_emisor=nif_emisor,
+        numero_factura=numero,
+        serie=serie,
+        fecha_expedicion=fecha,
+        importe_total=importe_total,
+        hash_factura=hash_factura
     )
-    qr_data = base_url + params
+    
     qr = qrcode.QRCode(box_size=4, border=1)
     qr.add_data(qr_data)
     qr.make(fit=True)
