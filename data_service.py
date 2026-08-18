@@ -10,7 +10,6 @@ def get_invoices(user_id):
     if not df.empty and "clients_v2" in df.columns:
         df["client_name"] = df["clients_v2"].apply(lambda x: x["name"] if isinstance(x, dict) else "")
         df.drop(columns=["clients_v2"], inplace=True)
-    # Protección de columnas comunes
     for col in ["description", "base_amount", "vat_amount", "irpf_amount", "total"]:
         if col not in df.columns:
             df[col] = 0.0 if col != "description" else ""
@@ -30,7 +29,6 @@ def get_suppliers(user_id):
 
 @st.cache_data(ttl=60)
 def get_products(user_id):
-    # Incluimos explícitamente 'description' y protegemos su ausencia
     resp = refetch("products_v2", "id, name, description, price, default_vat_percentage, default_irpf_percentage", user_id)
     df = pd.DataFrame(resp.data) if resp.data else pd.DataFrame()
     if 'description' not in df.columns:
@@ -56,7 +54,6 @@ def get_bank_transactions(user_id):
 
 @st.cache_data(ttl=60)
 def get_recurring_invoices(user_id):
-    # Obtenemos las facturas recurrentes sin join implícito para evitar errores de relación
     resp = refetch("recurring_invoices", "*", user_id)
     df = pd.DataFrame(resp.data) if resp.data else pd.DataFrame()
 
@@ -81,7 +78,6 @@ def get_recurring_invoices(user_id):
 
 @st.cache_data(ttl=60)
 def get_budgets(user_id):
-    # Incluimos 'description' explícitamente y protegemos
     resp = refetch("budgets", "id, budget_number, date, client_name, base_total, total, status, description", user_id)
     df = pd.DataFrame(resp.data) if resp.data else pd.DataFrame()
     if 'description' not in df.columns:
@@ -96,5 +92,13 @@ def get_journal_entries(user_id):
         df['description'] = ""
     return df
 
-
-
+def clear_all_caches():
+    get_invoices.clear()
+    get_clients.clear()
+    get_suppliers.clear()
+    get_products.clear()
+    get_expenses.clear()
+    get_bank_transactions.clear()
+    get_recurring_invoices.clear()
+    get_budgets.clear()
+    get_journal_entries.clear()
