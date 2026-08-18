@@ -45,7 +45,8 @@ if "user" not in st.session_state:
 # ------------------------------------------------------------
 if st.session_state.user is None:
     query_params = st.query_params
-    if "type" in query_params and query_params["type"] == "recovery" and "access_token" in query_params:
+    # Detectar recuperación de contraseña
+    if ("type" in query_params and query_params["type"] == "recovery") or "access_token" in query_params:
         st.title("🔐 Establecer nueva contraseña")
         with st.form("reset_password"):
             new_password = st.text_input("Nueva contraseña", type="password")
@@ -57,13 +58,17 @@ if st.session_state.user is None:
                     st.error("La contraseña debe tener al menos 6 caracteres.")
                 else:
                     try:
-                        supabase.auth.set_session(
-                            query_params["access_token"],
-                            query_params.get("refresh_token", "")
-                        )
+                        # Si hay token de acceso, establecer la sesión
+                        if "access_token" in query_params:
+                            supabase.auth.set_session(
+                                query_params["access_token"],
+                                query_params.get("refresh_token", "")
+                            )
+                        # Actualizar contraseña
                         supabase.auth.update_user({"password": new_password})
                         st.success("¡Contraseña actualizada! Ya puedes iniciar sesión.")
                         st.query_params.clear()
+                        time.sleep(1)
                         st.rerun()
                     except Exception as e:
                         st.error(f"Error al restablecer la contraseña: {e}")
@@ -260,63 +265,221 @@ if menu == "🏠 Salpicadero":
     col_f3.metric("Promedio por factura", money(bv/num_facturas) if num_facturas > 0 else "0.00 €")
 
 # ------------------------------------------------------------
-# CLIENTES
+# CLIENTES (con edición y eliminación)
 # ------------------------------------------------------------
 elif menu == "👥 Clientes":
     st.title("Gestión de Clientes")
-    with st.form("add_client", clear_on_submit=True):
-        n = st.text_input("Nombre")
-        t = st.text_input("NIF")
-        a = st.text_input("Dirección")
-        tipo = st.radio("Tipo de cliente", ["Empresa (B2B)", "Particular (B2C)"], horizontal=True)
-        if st.form_submit_button("Guardar") and n:
-            t_val = (t or "").strip()
-            if t_val and not validar_nif_cif(t_val):
-                st.error("El NIF/CIF introducido no es válido.")
-            else:
-                try:
-                    supabase.table("clients_v2").insert({
-                        "user_id": user_id,
-                        "name": n.strip(),
-                        "tax_id": t_val,
-                        "address": (a or "").strip(),
-                        "type": "b2b" if "B2B" in tipo else "b2c"
-                    }).execute()
-                    st.success("Cliente guardado")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error al guardar cliente: {e}")
-    df = get_clients(user_id)
-    if not df.empty:
-        df["Tipo"] = df["type"].map({"b2b": "Empresa", "b2c": "Particular"})
-        df.drop(columns=["type"], inplace=True)
-    st.dataframe(df, width='stretch')
+    clientes_df = get_clients(user_id)
+
+    tab_add, tab_edit, tab_del = st.tabs(["Añadir nuevo", "Editar existente", "Eliminar"])
+
+    with tab_add:
+        with st.form("add_client", clear_on_submit=True):
+            n = st.text_input("Nombre")
+            t = st.text_input("NIF")
+            a = st.text_input("Dirección")
+            tipo = st.radio("Tipo de cliente", ["Empresa (B2B)", "Particular (B2C)"], horizontal=True)
+            if st.form_submit_button("Guardar cliente"):
+                if n:
+                    t_val = (t or "").strip()
+                    if t_val and not validar_nif_cif(t_val):
+                        st.error("El NIF/CIF introducido no es válido.")
+                    else:
+                        try:
+                            supabase.table("clients_v2").insert({
+                                "user_id": user_id,
+                                "name": n.strip(),
+                                "tax_id": t_val,
+                                "address": (a or "").strip(),
+                                "type": "b2b" if "B2B" in tipo else "b2c"
+                            }).execute()
+                            st.success("Cliente guardado correctamente")
+                            st.cache_data.clear()
+                            time.sleep(0.5)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error al guardar cliente: {e}")
+                else:
+                    st.error("El nombre es obligatorio.")
+
+    with tab_edit:
+        if clientes_df.empty:
+            st.info("No hay clientes registrados para editar.")
+        else:
+            cliente_sel = st.selectbox(
+                "Selecciona un cliente",
+                clientes_df["name"].tolist(),
+                key="edit_client_select"
+            )
+            cliente_row = clientes_df[clientes_df["name"] == cliente_sel].iloc[0]
+
+            with st.form("edit_client_form"):
+                nuevo_nombre = st.text_input("Nombre", value=cliente_row["name"])
+                nuevo_nif = st.text_input("NIF", value=cliente_row["tax_id"])
+                nueva_direccion = st.text_input("Dirección", value=cliente_row["address"])
+                nuevo_tipo = st.radio("Tipo de cliente", ["Empresa (B2B)", "Particular (B2C)"],
+                                      index=0 if cliente_row.get("type") == "b2b" else 1,
+                                      horizontal=True)
+
+                if st.form_submit_button("Guardar cambios"):
+                    nif_val = (nuevo_nif or "").strip()
+                    if nif_val and not validar_nif_cif(nif_val):
+                        st.error("El NIF/CIF introducido no es válido.")
+                    else:
+                        try:
+                            supabase.table("clients_v2").update({
+                                "name": nuevo_nombre.strip(),
+                                "tax_id": nif_val,
+                                "address": nueva_direccion.strip(),
+                                "type": "b2b" if "B2B" in nuevo_tipo else "b2c"
+                            }).eq("id", cliente_row["id"]).execute()
+                            st.success("Cliente actualizado correctamente")
+                            st.cache_data.clear()
+                            time.sleep(0.5)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error al actualizar cliente: {e}")
+
+    with tab_del:
+        if clientes_df.empty:
+            st.info("No hay clientes registrados para eliminar.")
+        else:
+            cliente_del = st.selectbox(
+                "Selecciona un cliente a eliminar",
+                clientes_df["name"].tolist(),
+                key="del_client_select"
+            )
+            cliente_row_del = clientes_df[clientes_df["name"] == cliente_del].iloc[0]
+
+            st.warning(f"⚠️ Vas a eliminar al cliente: **{cliente_del}**")
+            if st.button("🗑️ Eliminar definitivamente", key="delete_client_btn"):
+                confirmado = st.checkbox("Confirmo que deseo eliminar este cliente", key="confirm_delete_client")
+                if confirmado:
+                    try:
+                        supabase.table("clients_v2").delete().eq("id", cliente_row_del["id"]).execute()
+                        st.success("Cliente eliminado correctamente")
+                        st.cache_data.clear()
+                        time.sleep(0.5)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error al eliminar cliente: {e}")
+                else:
+                    st.error("Debes marcar la casilla de confirmación para eliminar.")
+
+    # Mostrar listado actual
+    st.markdown("---")
+    st.subheader("Listado de clientes")
+    if not clientes_df.empty:
+        clientes_display = clientes_df.copy()
+        clientes_display["Tipo"] = clientes_display["type"].map({"b2b": "Empresa", "b2c": "Particular"})
+        clientes_display.drop(columns=["type"], inplace=True, errors="ignore")
+        st.dataframe(clientes_display, width='stretch')
+    else:
+        st.info("No hay clientes registrados.")
 
 # ------------------------------------------------------------
-# PROVEEDORES
+# PROVEEDORES (con edición y eliminación)
 # ------------------------------------------------------------
 elif menu == "🤝 Proveedores":
     st.title("Gestión de Proveedores")
-    with st.form("add_supplier", clear_on_submit=True):
-        n, t, a = st.text_input("Nombre"), st.text_input("NIF"), st.text_input("Dirección")
-        if st.form_submit_button("Guardar") and n:
-            t_val = (t or "").strip()
-            if t_val and not validar_nif_cif(t_val):
-                st.error("El NIF/CIF del proveedor no es válido.")
-            else:
-                try:
-                    supabase.table("suppliers_v2").insert({
-                        "user_id": user_id,
-                        "name": n.strip(),
-                        "tax_id": t_val,
-                        "address": (a or "").strip()
-                    }).execute()
-                    st.success("Proveedor guardado")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error al guardar proveedor: {e}")
-    df = get_suppliers(user_id)
-    st.dataframe(df, width='stretch')
+    proveedores_df = get_suppliers(user_id)
+
+    tab_add, tab_edit, tab_del = st.tabs(["Añadir nuevo", "Editar existente", "Eliminar"])
+
+    with tab_add:
+        with st.form("add_supplier", clear_on_submit=True):
+            n = st.text_input("Nombre")
+            t = st.text_input("NIF")
+            a = st.text_input("Dirección")
+            if st.form_submit_button("Guardar proveedor"):
+                if n:
+                    t_val = (t or "").strip()
+                    if t_val and not validar_nif_cif(t_val):
+                        st.error("El NIF/CIF del proveedor no es válido.")
+                    else:
+                        try:
+                            supabase.table("suppliers_v2").insert({
+                                "user_id": user_id,
+                                "name": n.strip(),
+                                "tax_id": t_val,
+                                "address": (a or "").strip()
+                            }).execute()
+                            st.success("Proveedor guardado correctamente")
+                            st.cache_data.clear()
+                            time.sleep(0.5)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error al guardar proveedor: {e}")
+                else:
+                    st.error("El nombre es obligatorio.")
+
+    with tab_edit:
+        if proveedores_df.empty:
+            st.info("No hay proveedores registrados para editar.")
+        else:
+            prov_sel = st.selectbox(
+                "Selecciona un proveedor",
+                proveedores_df["name"].tolist(),
+                key="edit_supplier_select"
+            )
+            prov_row = proveedores_df[proveedores_df["name"] == prov_sel].iloc[0]
+
+            with st.form("edit_supplier_form"):
+                nuevo_nombre = st.text_input("Nombre", value=prov_row["name"])
+                nuevo_nif = st.text_input("NIF", value=prov_row["tax_id"])
+                nueva_direccion = st.text_input("Dirección", value=prov_row["address"])
+
+                if st.form_submit_button("Guardar cambios"):
+                    nif_val = (nuevo_nif or "").strip()
+                    if nif_val and not validar_nif_cif(nif_val):
+                        st.error("El NIF/CIF del proveedor no es válido.")
+                    else:
+                        try:
+                            supabase.table("suppliers_v2").update({
+                                "name": nuevo_nombre.strip(),
+                                "tax_id": nif_val,
+                                "address": nueva_direccion.strip()
+                            }).eq("id", prov_row["id"]).execute()
+                            st.success("Proveedor actualizado correctamente")
+                            st.cache_data.clear()
+                            time.sleep(0.5)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error al actualizar proveedor: {e}")
+
+    with tab_del:
+        if proveedores_df.empty:
+            st.info("No hay proveedores registrados para eliminar.")
+        else:
+            prov_del = st.selectbox(
+                "Selecciona un proveedor a eliminar",
+                proveedores_df["name"].tolist(),
+                key="del_supplier_select"
+            )
+            prov_row_del = proveedores_df[proveedores_df["name"] == prov_del].iloc[0]
+
+            st.warning(f"⚠️ Vas a eliminar al proveedor: **{prov_del}**")
+            if st.button("🗑️ Eliminar definitivamente", key="delete_supplier_btn"):
+                confirmado = st.checkbox("Confirmo que deseo eliminar este proveedor", key="confirm_delete_supplier")
+                if confirmado:
+                    try:
+                        supabase.table("suppliers_v2").delete().eq("id", prov_row_del["id"]).execute()
+                        st.success("Proveedor eliminado correctamente")
+                        st.cache_data.clear()
+                        time.sleep(0.5)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error al eliminar proveedor: {e}")
+                else:
+                    st.error("Debes marcar la casilla de confirmación para eliminar.")
+
+    # Mostrar listado actual
+    st.markdown("---")
+    st.subheader("Listado de proveedores")
+    if not proveedores_df.empty:
+        st.dataframe(proveedores_df, width='stretch')
+    else:
+        st.info("No hay proveedores registrados.")
 
 # ------------------------------------------------------------
 # PRODUCTOS (con añadir, editar y eliminar)
@@ -325,7 +488,6 @@ elif menu == "📦 Productos":
     st.title("Catálogo de Productos / Servicios")
     productos_df = get_products(user_id)
 
-    # Asegurar que existan las columnas necesarias
     if not productos_df.empty:
         for col in ["description", "price", "default_vat_percentage", "default_irpf_percentage"]:
             if col not in productos_df.columns:
@@ -336,7 +498,6 @@ elif menu == "📦 Productos":
 
     tab_add, tab_edit, tab_del = st.tabs(["Añadir nuevo", "Editar existente", "Eliminar"])
 
-    # ---------------- TAB AÑADIR NUEVO ----------------
     with tab_add:
         with st.form("add_product", clear_on_submit=True):
             nombre = st.text_input("Nombre")
@@ -364,7 +525,6 @@ elif menu == "📦 Productos":
                 else:
                     st.error("El nombre es obligatorio.")
 
-    # ---------------- TAB EDITAR EXISTENTE ----------------
     with tab_edit:
         if productos_df.empty:
             st.info("No hay productos registrados para editar.")
@@ -402,7 +562,6 @@ elif menu == "📦 Productos":
                     else:
                         st.error("El nombre es obligatorio.")
 
-    # ---------------- TAB ELIMINAR ----------------
     with tab_del:
         if productos_df.empty:
             st.info("No hay productos registrados para eliminar.")
@@ -429,7 +588,6 @@ elif menu == "📦 Productos":
                 else:
                     st.error("Debes marcar la casilla de confirmación para eliminar.")
 
-    # Mostrar catálogo actual
     st.markdown("---")
     st.subheader("Catálogo actual")
     if not productos_df.empty:
@@ -1424,7 +1582,6 @@ elif menu == "📝 Presupuestos":
         clientes_df = get_clients(user_id)
         productos_df = get_products(user_id)
 
-        # Asegurar columnas
         if not productos_df.empty:
             for col in ["description", "price", "default_vat_percentage", "default_irpf_percentage"]:
                 if col not in productos_df.columns:
@@ -1573,10 +1730,8 @@ elif menu == "📝 Presupuestos":
                         key=f"bud_desc_{i}"
                     )
                 else:
-                    # Cargar descripción desde BD de forma segura
                     prod_info = productos_df[productos_df["name"] == prod_sel]
                     if not prod_info.empty:
-                        # Aseguramos que la columna 'description' exista en el DataFrame
                         if 'description' not in prod_info.columns:
                             prod_info['description'] = ""
                         descripcion_producto = prod_info.iloc[0].get("description", "")
@@ -1640,7 +1795,6 @@ elif menu == "📝 Presupuestos":
                 total_linea = base_linea + vat_amount + irpf_amount
                 st.text(f"Total: {money(total_linea)}")
 
-            # Construir la descripción final
             if prod_sel != "-- Manual --" and desc_manual.strip():
                 descripcion_linea = f"{prod_sel}\n{desc_manual.strip()}"
             elif prod_sel == "-- Manual --" and desc_manual.strip():
@@ -1898,7 +2052,7 @@ elif menu == "👥 Colaboradores":
     st.info("Funcionalidad en desarrollo.")
 
 # ------------------------------------------------------------
-# CONFIGURACIÓN (con botón explícito "Guardar datos fiscales")
+# CONFIGURACIÓN
 # ------------------------------------------------------------
 elif menu == "⚙️ Configuración":
     st.title("Configuración de empresa y plantillas")
@@ -1994,47 +2148,3 @@ elif menu == "⚙️ Configuración":
         pdf_bytes = make_invoice_pdf_from_template(ejemplo_invoice, ejemplo_client, ejemplo_company, ejemplo_lineas)
         if pdf_bytes:
             st.download_button("Descargar factura de prueba", pdf_bytes, "prueba_factura.pdf", "application/pdf")
-
-
-           
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
