@@ -16,7 +16,8 @@ from config import LISTA_MESES, AUTONOMO_NAME, AUTONOMO_TAX_ID, AUTONOMO_ADDRESS
 from database import (
     init_supabase,
     obtener_siguiente_numero_factura, obtener_siguiente_numero_presupuesto,
-    crear_factura_con_rollback, crear_gasto_con_rollback
+    crear_factura_con_rollback, crear_gasto_con_rollback,
+    auditar_factura
 )
 from pdf_utils import make_invoice_pdf_from_template, make_budget_pdf
 from email_utils import enviar_factura_email
@@ -605,7 +606,7 @@ elif menu == "📦 Productos":
         st.info("No hay productos en el catálogo.")
 
 # ------------------------------------------------------------
-# VENTAS (con mes automático e IRPF 0)
+# VENTAS (con mes automático, IRPF 0, XML FacturaE y Veri*Factu)
 # ------------------------------------------------------------
 elif menu == "💰 Ventas":
     st.title("Facturas de Venta")
@@ -623,16 +624,6 @@ elif menu == "💰 Ventas":
     if "confirmar_anulacion" not in st.session_state:
         st.session_state.confirmar_anulacion = False
         st.session_state.factura_a_anular = None
-
-    def auditar(invoice_id, accion):
-        try:
-            supabase.table("facturas_audit").insert({
-                "invoice_id": invoice_id,
-                "accion": accion,
-                "user_id": user_id
-            }).execute()
-        except Exception as e:
-            st.warning(f"No se pudo registrar auditoría: {e}")
 
     TRANSICIONES = {
         "pendiente": ["pagada", "vencida"],
@@ -741,7 +732,6 @@ elif menu == "💰 Ventas":
                             inv_data, lineas, user_id, cliente_row["name"]
                         )
                     if exito:
-                        auditar(invoice_id, "emitida")
                         st.toast("✅ Factura creada correctamente", icon="✅")
                         st.success(mensaje)
                         get_invoices.clear()
@@ -837,10 +827,9 @@ elif menu == "💰 Ventas":
                     if exito:
                         try:
                             supabase.table("invoices_v2").update({"status": "rectificada"}).eq("id", original["id"]).execute()
-                            auditar(original["id"], "rectificada")
+                            auditar_factura(original["id"], "rectificada", inv_data.get("hash", ""), user_id)
                         except Exception as e:
                             st.error(f"Error al marcar factura original como rectificada: {e}")
-                        auditar(invoice_id, "emitida")
                         st.toast("✅ Factura rectificativa creada", icon="✅")
                         st.success(mensaje)
                         st.session_state.modo_rectificativa = False
@@ -872,7 +861,7 @@ elif menu == "💰 Ventas":
                 if st.form_submit_button("Actualizar estado"):
                     try:
                         supabase.table("invoices_v2").update({"status": nuevo_estado}).eq("id", fact_id).execute()
-                        auditar(fact_id, nuevo_estado)
+                        auditar_factura(fact_id, nuevo_estado, factura_row.get("hash", ""), user_id)
                         st.success("Estado actualizado")
                         get_invoices.clear()
                         st.rerun()
@@ -938,13 +927,25 @@ elif menu == "💰 Ventas":
             pdf_bytes = make_invoice_pdf_from_template(factura_row, cliente, company_config, lineas_fact_list)
             if pdf_bytes:
                 st.download_button("⬇️ Descargar PDF", pdf_bytes, f"Factura_{factura_row['invoice_number']}.pdf", mime="application/pdf")
+            
+            # Botón XML FacturaE
+            if st.button("📄 Descargar XML FacturaE", key=f"xml_{fact_id}"):
+                from facturae_utils import generar_facturae_xml
+                xml_str = generar_facturae_xml(factura_row, cliente, company_config, lineas_fact_list)
+                st.download_button(
+                    "Descargar XML",
+                    xml_str.encode('utf-8'),
+                    f"Factura_{factura_row['invoice_number']}.xml",
+                    mime="application/xml",
+                    key=f"download_xml_{fact_id}"
+                )
         with col2:
             destinatario = st.text_input("Email del cliente", value="cliente@example.com", key="email_fact")
             if st.button("📧 Enviar factura por email"):
                 if pdf_bytes:
                     exito = enviar_factura_email(destinatario, f"Factura {factura_row['invoice_number']}", "Adjunto su factura.", pdf_bytes, f"Factura_{factura_row['invoice_number']}.pdf")
                     if exito:
-                        auditar(fact_id, "enviada")
+                        auditar_factura(fact_id, "enviada", factura_row.get("hash", ""), user_id)
                         st.success("Factura enviada")
                     else:
                         st.error("No se pudo enviar")
@@ -973,7 +974,7 @@ elif menu == "💰 Ventas":
                             if confirmado:
                                 try:
                                     supabase.table("invoices_v2").update({"status": "anulada"}).eq("id", fact_id).execute()
-                                    auditar(fact_id, "anulada")
+                                    auditar_factura(fact_id, "anulada", factura_row.get("hash", ""), user_id)
                                     st.success("Factura anulada correctamente")
                                     st.session_state.confirmar_anulacion = False
                                     st.session_state.factura_a_anular = None
