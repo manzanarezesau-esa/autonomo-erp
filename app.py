@@ -2272,37 +2272,50 @@ elif menu == "📝 Presupuestos":
                 selected_row = event.selection.rows[0]
                 budget_row = budgets_df.iloc[selected_row]
                 budget_id = budget_row["id"]
-                budget_data = budget_row.to_dict()
+                
+                # Obtener datos completos del presupuesto desde Supabase
+                try:
+                    resp = supabase.table("budgets").select("*").eq("id", budget_id).single().execute()
+                    if resp.data:
+                        budget_data = resp.data
+                    else:
+                        budget_data = budget_row.to_dict()
+                except Exception:
+                    budget_data = budget_row.to_dict()
 
                 st.markdown("---")
                 st.subheader(f"Acciones para presupuesto {budget_data['budget_number']}")
-                st.write(f"**Cliente:** {budget_data['client_name']}")
-                st.write(f"**Fecha:** {budget_data['date']}")
-                st.write(f"**Total:** {money(budget_data['total'])}")
+                st.write(f"**Cliente:** {budget_data.get('client_name', '')}")
+                st.write(f"**Fecha:** {budget_data.get('date', '')}")
+                st.write(f"**Total:** {money(budget_data.get('total', 0))}")
                 
+                # Cargar líneas del presupuesto
                 try:
                     lineas_db = json.loads(budget_data.get("lines", "[]"))
                     if lineas_db:
                         st.table(pd.DataFrame(lineas_db)[["description", "quantity", "unit_price", "total"]])
                 except Exception:
-                    pass
+                    lineas_db = []
+
+                # Preparar datos del cliente para el PDF
+                client_d = {
+                    "name": budget_data.get("client_name", ""),
+                    "tax_id": budget_data.get("client_tax_id", ""),
+                    "address": budget_data.get("client_address", "")
+                }
 
                 col1, col2, col3, col4 = st.columns(4)
                 
                 with col1:
                     if st.button("📄 Descargar PDF", key=f"pdf_{budget_id}"):
                         empresa["user_id"] = user_id
-                        client_d = {
-                            "name": budget_data.get("client_name", ""),
-                            "tax_id": budget_data.get("client_tax_id", ""),
-                            "address": budget_data.get("client_address", "")
-                        }
-                        lineas_db = json.loads(budget_data.get("lines", "[]"))
                         if empresa and client_d and lineas_db:
                             pdf_bytes = make_budget_pdf(
                                 empresa, client_d, lineas_db,
-                                budget_data["base_total"], budget_data["vat_total"],
-                                budget_data["total"], budget_data["vat_pct"],
+                                budget_data.get("base_total", 0), 
+                                budget_data.get("vat_total", 0),
+                                budget_data.get("total", 0), 
+                                budget_data.get("vat_pct", 21),
                                 budget_number=budget_data.get("budget_number", "---")
                             )
                             if pdf_bytes:
@@ -2317,11 +2330,9 @@ elif menu == "📝 Presupuestos":
                             st.error("Faltan datos para generar el presupuesto.")
                 
                 with col2:
-                    # Botón para mostrar campo de email
                     if st.button("📧 Enviar por email", key=f"email_btn_{budget_id}"):
                         st.session_state[f"show_email_{budget_id}"] = True
                     
-                    # Si se ha pulsado el botón, mostrar campo de email y botón de envío
                     if st.session_state.get(f"show_email_{budget_id}", False):
                         destinatario = st.text_input(
                             "Email del destinatario",
@@ -2333,17 +2344,13 @@ elif menu == "📝 Presupuestos":
                                 st.error("Introduce un email válido.")
                             else:
                                 empresa["user_id"] = user_id
-                                client_d = {
-                                    "name": budget_data.get("client_name", ""),
-                                    "tax_id": budget_data.get("client_tax_id", ""),
-                                    "address": budget_data.get("client_address", "")
-                                }
-                                lineas_db = json.loads(budget_data.get("lines", "[]"))
                                 if empresa and client_d and lineas_db:
                                     pdf_bytes = make_budget_pdf(
                                         empresa, client_d, lineas_db,
-                                        budget_data["base_total"], budget_data["vat_total"],
-                                        budget_data["total"], budget_data["vat_pct"],
+                                        budget_data.get("base_total", 0),
+                                        budget_data.get("vat_total", 0),
+                                        budget_data.get("total", 0),
+                                        budget_data.get("vat_pct", 21),
                                         budget_number=budget_data.get("budget_number", "---")
                                     )
                                     if pdf_bytes:
@@ -2362,6 +2369,8 @@ elif menu == "📝 Presupuestos":
                                             st.rerun()
                                         else:
                                             st.error("No se pudo enviar el email")
+                                    else:
+                                        st.error("No se pudo generar el PDF del presupuesto.")
                                 else:
                                     st.error("Faltan datos para generar el presupuesto.")
                 
@@ -2376,7 +2385,7 @@ elif menu == "📝 Presupuestos":
                         confirmado = st.checkbox("Confirmar eliminación", key=f"confirm_del_{budget_id}")
                         if confirmado:
                             try:
-                                supabase.table("budgets").delete().eq("id", budget_data["id"]).execute()
+                                supabase.table("budgets").delete().eq("id", budget_id).execute()
                                 st.success("Presupuesto eliminado.")
                                 get_budgets.clear()
                                 st.rerun()
