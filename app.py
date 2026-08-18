@@ -40,6 +40,19 @@ if "user" not in st.session_state:
     st.session_state.access_token = None
     st.session_state.user_id = None
 
+# Intentar restaurar sesión activa de Supabase si existe
+try:
+    if st.session_state.user is None:
+        session = supabase.auth.get_session()
+        if session and getattr(session, "user", None):
+            st.session_state.user = session.user
+            st.session_state.access_token = session.access_token
+            user_meta = supabase.auth.get_user()
+            if user_meta and user_meta.user:
+                st.session_state.user_id = user_meta.user.id
+except Exception:
+    pass
+
 # ------------------------------------------------------------
 # Pantalla de Login / Registro / Recuperación
 # ------------------------------------------------------------
@@ -58,13 +71,11 @@ if st.session_state.user is None:
                     st.error("La contraseña debe tener al menos 6 caracteres.")
                 else:
                     try:
-                        # Si hay token de acceso, establecer la sesión
                         if "access_token" in query_params:
                             supabase.auth.set_session(
                                 query_params["access_token"],
                                 query_params.get("refresh_token", "")
                             )
-                        # Actualizar contraseña
                         supabase.auth.update_user({"password": new_password})
                         st.success("¡Contraseña actualizada! Ya puedes iniciar sesión.")
                         st.query_params.clear()
@@ -294,7 +305,7 @@ elif menu == "👥 Clientes":
                                 "type": "b2b" if "B2B" in tipo else "b2c"
                             }).execute()
                             st.success("Cliente guardado correctamente")
-                            st.cache_data.clear()
+                            get_clients.clear()
                             time.sleep(0.5)
                             st.rerun()
                         except Exception as e:
@@ -334,7 +345,7 @@ elif menu == "👥 Clientes":
                                 "type": "b2b" if "B2B" in nuevo_tipo else "b2c"
                             }).eq("id", cliente_row["id"]).execute()
                             st.success("Cliente actualizado correctamente")
-                            st.cache_data.clear()
+                            get_clients.clear()
                             time.sleep(0.5)
                             st.rerun()
                         except Exception as e:
@@ -358,7 +369,7 @@ elif menu == "👥 Clientes":
                     try:
                         supabase.table("clients_v2").delete().eq("id", cliente_row_del["id"]).execute()
                         st.success("Cliente eliminado correctamente")
-                        st.cache_data.clear()
+                        get_clients.clear()
                         time.sleep(0.5)
                         st.rerun()
                     except Exception as e:
@@ -366,7 +377,6 @@ elif menu == "👥 Clientes":
                 else:
                     st.error("Debes marcar la casilla de confirmación para eliminar.")
 
-    # Mostrar listado actual
     st.markdown("---")
     st.subheader("Listado de clientes")
     if not clientes_df.empty:
@@ -405,7 +415,7 @@ elif menu == "🤝 Proveedores":
                                 "address": (a or "").strip()
                             }).execute()
                             st.success("Proveedor guardado correctamente")
-                            st.cache_data.clear()
+                            get_suppliers.clear()
                             time.sleep(0.5)
                             st.rerun()
                         except Exception as e:
@@ -441,7 +451,7 @@ elif menu == "🤝 Proveedores":
                                 "address": nueva_direccion.strip()
                             }).eq("id", prov_row["id"]).execute()
                             st.success("Proveedor actualizado correctamente")
-                            st.cache_data.clear()
+                            get_suppliers.clear()
                             time.sleep(0.5)
                             st.rerun()
                         except Exception as e:
@@ -465,7 +475,7 @@ elif menu == "🤝 Proveedores":
                     try:
                         supabase.table("suppliers_v2").delete().eq("id", prov_row_del["id"]).execute()
                         st.success("Proveedor eliminado correctamente")
-                        st.cache_data.clear()
+                        get_suppliers.clear()
                         time.sleep(0.5)
                         st.rerun()
                     except Exception as e:
@@ -473,7 +483,6 @@ elif menu == "🤝 Proveedores":
                 else:
                     st.error("Debes marcar la casilla de confirmación para eliminar.")
 
-    # Mostrar listado actual
     st.markdown("---")
     st.subheader("Listado de proveedores")
     if not proveedores_df.empty:
@@ -517,7 +526,7 @@ elif menu == "📦 Productos":
                             "default_irpf_percentage": irpf_default
                         }).execute()
                         st.success("Producto guardado correctamente")
-                        st.cache_data.clear()
+                        get_products.clear()
                         time.sleep(0.5)
                         st.rerun()
                     except Exception as e:
@@ -554,7 +563,7 @@ elif menu == "📦 Productos":
                                 "default_irpf_percentage": nuevo_irpf
                             }).eq("id", prod_row["id"]).execute()
                             st.success("Producto actualizado correctamente")
-                            st.cache_data.clear()
+                            get_products.clear()
                             time.sleep(0.5)
                             st.rerun()
                         except Exception as e:
@@ -580,7 +589,7 @@ elif menu == "📦 Productos":
                     try:
                         supabase.table("products_v2").delete().eq("id", prod_row_del["id"]).execute()
                         st.success("Producto eliminado correctamente")
-                        st.cache_data.clear()
+                        get_products.clear()
                         time.sleep(0.5)
                         st.rerun()
                     except Exception as e:
@@ -735,7 +744,7 @@ elif menu == "💰 Ventas":
                         auditar(invoice_id, "emitida")
                         st.toast("✅ Factura creada correctamente", icon="✅")
                         st.success(mensaje)
-                        st.cache_data.clear()
+                        get_invoices.clear()
                         time.sleep(0.5)
                         st.rerun()
                     else:
@@ -835,7 +844,7 @@ elif menu == "💰 Ventas":
                         st.toast("✅ Factura rectificativa creada", icon="✅")
                         st.success(mensaje)
                         st.session_state.modo_rectificativa = False
-                        st.cache_data.clear()
+                        get_invoices.clear()
                         time.sleep(0.5)
                         st.rerun()
                     else:
@@ -865,7 +874,7 @@ elif menu == "💰 Ventas":
                         supabase.table("invoices_v2").update({"status": nuevo_estado}).eq("id", fact_id).execute()
                         auditar(fact_id, nuevo_estado)
                         st.success("Estado actualizado")
-                        st.cache_data.clear()
+                        get_invoices.clear()
                         st.rerun()
                     except Exception as e:
                         st.error(f"Error al actualizar estado: {e}")
@@ -968,7 +977,7 @@ elif menu == "💰 Ventas":
                                     st.success("Factura anulada correctamente")
                                     st.session_state.confirmar_anulacion = False
                                     st.session_state.factura_a_anular = None
-                                    st.cache_data.clear()
+                                    get_invoices.clear()
                                     st.rerun()
                                 except Exception as e:
                                     st.error(f"Error al anular factura: {e}")
@@ -1039,7 +1048,7 @@ elif menu == "🛒 Compras":
                     if exito:
                         st.toast("✅ Gasto registrado correctamente", icon="✅")
                         st.success(mensaje)
-                        st.cache_data.clear()
+                        get_expenses.clear()
                         time.sleep(0.5)
                         st.rerun()
                     else:
@@ -1085,7 +1094,7 @@ elif menu == "🛒 Compras":
                         supabase.table("expenses_v2").update(updates).eq("id", st.session_state.gasto_editando_id).execute()
                         st.success("Gasto actualizado")
                         st.session_state.modo_edicion_gasto = False
-                        st.cache_data.clear()
+                        get_expenses.clear()
                         st.rerun()
                     except Exception as e:
                         st.error(f"Error al actualizar gasto: {e}")
@@ -1128,7 +1137,7 @@ elif menu == "🛒 Compras":
                     try:
                         supabase.table("expenses_v2").delete().eq("id", gasto_row["id"]).execute()
                         st.success("Gasto eliminado correctamente")
-                        st.cache_data.clear()
+                        get_expenses.clear()
                         st.rerun()
                     except Exception as e:
                         st.error(f"Error al eliminar gasto: {e}")
@@ -1162,6 +1171,7 @@ elif menu == "🔄 Facturación recurrente":
                     "active": True
                 }).execute()
                 st.success("Recurrencia guardada")
+                get_recurring_invoices.clear()
                 st.rerun()
             except Exception as e:
                 st.error(f"Error al guardar recurrencia: {e}")
@@ -1209,6 +1219,8 @@ elif menu == "🔄 Facturación recurrente":
                     except Exception:
                         pass
                 st.success(f"Se generaron {len(recs_to_process.data)} facturas")
+                get_recurring_invoices.clear()
+                get_invoices.clear()
                 st.rerun()
             else:
                 st.info("No hay facturas pendientes para hoy")
@@ -1413,6 +1425,7 @@ elif menu == "🏦 Conciliación Bancaria":
                         except Exception as e:
                             st.error(f"Error al insertar movimiento: {e}")
                     st.success("Movimientos importados correctamente.")
+                    get_bank_transactions.clear()
                     st.rerun()
             except Exception as e:
                 st.error(f"Error al leer CSV: {e}")
@@ -1442,6 +1455,7 @@ elif menu == "🏦 Conciliación Bancaria":
                     if df is not None and not df.empty:
                         st.dataframe(df.head(10))
                     st.session_state.gocardless_step = "idle"
+                    get_bank_transactions.clear()
                 else:
                     st.error(mensaje)
                     st.session_state.gocardless_step = "idle"
@@ -1463,6 +1477,7 @@ elif menu == "🏦 Conciliación Bancaria":
                                 try:
                                     supabase.table("bank_transactions").update({"matched_invoice_id": id_factura}).eq("id", mov["id"]).execute()
                                     st.success("Factura vinculada")
+                                    get_bank_transactions.clear()
                                     st.rerun()
                                 except Exception as e:
                                     st.error(f"Error al vincular factura: {e}")
@@ -1476,6 +1491,7 @@ elif menu == "🏦 Conciliación Bancaria":
                                 try:
                                     supabase.table("bank_transactions").update({"matched_expense_id": id_gasto}).eq("id", mov["id"]).execute()
                                     st.success("Gasto vinculado")
+                                    get_bank_transactions.clear()
                                     st.rerun()
                                 except Exception as e:
                                     st.error(f"Error al vincular gasto: {e}")
@@ -1893,7 +1909,7 @@ elif menu == "📝 Presupuestos":
                             st.success("Presupuesto actualizado correctamente.")
                             st.session_state.editing_budget_id = None
                             st.session_state.edit_budget_data = None
-                            st.cache_data.clear()
+                            get_budgets.clear()
                             time.sleep(0.5)
                             st.rerun()
                         except Exception as e:
@@ -1925,7 +1941,7 @@ elif menu == "📝 Presupuestos":
                                 if res.data:
                                     st.success(f"Presupuesto {budget_number} guardado correctamente.")
                                     guardado = True
-                                    st.cache_data.clear()
+                                    get_budgets.clear()
                                     time.sleep(0.5)
                                     st.rerun()
                             except Exception as e:
@@ -2035,7 +2051,7 @@ elif menu == "📝 Presupuestos":
                             try:
                                 supabase.table("budgets").delete().eq("id", budget_data["id"]).execute()
                                 st.success("Presupuesto eliminado.")
-                                st.cache_data.clear()
+                                get_budgets.clear()
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Error al eliminar presupuesto: {e}")
