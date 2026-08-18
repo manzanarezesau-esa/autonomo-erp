@@ -1,4 +1,3 @@
-# facturae_utils.py
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
 
@@ -126,7 +125,7 @@ def generar_facturae_xml(invoice, client, company, lineas):
     ET.SubElement(inv_totals, fe("TotalTaxesWithheld")).text = "0.00"
     ET.SubElement(inv_totals, fe("InvoiceTotal")).text = f"{total_val:.2f}"
 
-    # Formateo legible
+    # Formateo legible (al quitar encoding="utf-8" devuelve 'str' en lugar de 'bytes')
     xml_raw = ET.tostring(root, encoding="utf-8")
     parsed = minidom.parseString(xml_raw)
-    return parsed.toprettyxml(indent="  ", encoding="utf-8")
+    return parsed.toprettyxml(indent="  ")
