@@ -8,3 +8,6 @@ plotly
 python-stdnum
 requests
 weasyprint
+signxml
+cryptography
+lxml
