@@ -401,19 +401,28 @@ elif menu == "👥 Clientes":
                 cliente_row_del = clientes_df.iloc[selected_row]
                 
                 st.warning(f"⚠️ Vas a eliminar al cliente: **{cliente_row_del['name']}**")
-                if st.button("🗑️ Eliminar definitivamente", key="delete_client_btn"):
-                    confirmado = st.checkbox("Confirmo que deseo eliminar este cliente", key="confirm_delete_client")
-                    if confirmado:
-                        try:
-                            supabase.table("clients_v2").delete().eq("id", cliente_row_del["id"]).execute()
-                            st.success("Cliente eliminado correctamente")
-                            get_clients.clear()
-                            time.sleep(0.5)
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Error al eliminar cliente: {e}")
-                    else:
-                        st.error("Debes marcar la casilla de confirmación para eliminar.")
+                
+                confirmado = st.checkbox(
+                    "Confirmo que deseo eliminar este cliente",
+                    key=f"confirm_delete_client_{cliente_row_del['id']}"
+                )
+                
+                if st.button(
+                    "🗑️ Eliminar definitivamente",
+                    key=f"delete_client_btn_{cliente_row_del['id']}",
+                    disabled=not confirmado
+                ):
+                    try:
+                        supabase.table("clients_v2").delete().eq("id", cliente_row_del["id"]).execute()
+                        st.success("Cliente eliminado correctamente")
+                        get_clients.clear()
+                        time.sleep(0.5)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error al eliminar cliente: {e}")
+                
+                if not confirmado:
+                    st.caption("Debes marcar la casilla de confirmación para habilitar el botón.")
 
     st.markdown("---")
     st.subheader("Listado de clientes")
@@ -439,7 +448,7 @@ elif menu == "👥 Clientes":
         st.info("No hay clientes registrados.")
 
 # ------------------------------------------------------------
-# PROVEEDORES (con selección nativa)
+# PROVEEDORES (con selección nativa y eliminación corregida)
 # ------------------------------------------------------------
 elif menu == "🤝 Proveedores":
     st.title("Gestión de Proveedores")
@@ -556,19 +565,28 @@ elif menu == "🤝 Proveedores":
                 prov_row_del = proveedores_df.iloc[selected_row]
                 
                 st.warning(f"⚠️ Vas a eliminar al proveedor: **{prov_row_del['name']}**")
-                if st.button("🗑️ Eliminar definitivamente", key="delete_supplier_btn"):
-                    confirmado = st.checkbox("Confirmo que deseo eliminar este proveedor", key="confirm_delete_supplier")
-                    if confirmado:
-                        try:
-                            supabase.table("suppliers_v2").delete().eq("id", prov_row_del["id"]).execute()
-                            st.success("Proveedor eliminado correctamente")
-                            get_suppliers.clear()
-                            time.sleep(0.5)
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Error al eliminar proveedor: {e}")
-                    else:
-                        st.error("Debes marcar la casilla de confirmación para eliminar.")
+                
+                confirmado = st.checkbox(
+                    "Confirmo que deseo eliminar este proveedor",
+                    key=f"confirm_delete_supplier_{prov_row_del['id']}"
+                )
+                
+                if st.button(
+                    "🗑️ Eliminar definitivamente",
+                    key=f"delete_supplier_btn_{prov_row_del['id']}",
+                    disabled=not confirmado
+                ):
+                    try:
+                        supabase.table("suppliers_v2").delete().eq("id", prov_row_del["id"]).execute()
+                        st.success("Proveedor eliminado correctamente")
+                        get_suppliers.clear()
+                        time.sleep(0.5)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error al eliminar proveedor: {e}")
+                
+                if not confirmado:
+                    st.caption("Debes marcar la casilla de confirmación para habilitar el botón.")
 
     st.markdown("---")
     st.subheader("Listado de proveedores")
@@ -592,7 +610,7 @@ elif menu == "🤝 Proveedores":
         st.info("No hay proveedores registrados.")
 
 # ------------------------------------------------------------
-# PRODUCTOS (con selección nativa)
+# PRODUCTOS (con selección nativa y eliminación corregida)
 # ------------------------------------------------------------
 elif menu == "📦 Productos":
     st.title("Catálogo de Productos / Servicios")
@@ -723,19 +741,28 @@ elif menu == "📦 Productos":
                 prod_row_del = productos_df.iloc[selected_row]
                 
                 st.warning(f"⚠️ Vas a eliminar el producto: **{prod_row_del['name']}**")
-                if st.button("🗑️ Eliminar definitivamente", key="delete_product_btn"):
-                    confirmado = st.checkbox("Confirmo que deseo eliminar este producto", key="confirm_delete_product")
-                    if confirmado:
-                        try:
-                            supabase.table("products_v2").delete().eq("id", prod_row_del["id"]).execute()
-                            st.success("Producto eliminado correctamente")
-                            get_products.clear()
-                            time.sleep(0.5)
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Error al eliminar producto: {e}")
-                    else:
-                        st.error("Debes marcar la casilla de confirmación para eliminar.")
+                
+                confirmado = st.checkbox(
+                    "Confirmo que deseo eliminar este producto",
+                    key=f"confirm_delete_product_{prod_row_del['id']}"
+                )
+                
+                if st.button(
+                    "🗑️ Eliminar definitivamente",
+                    key=f"delete_product_btn_{prod_row_del['id']}",
+                    disabled=not confirmado
+                ):
+                    try:
+                        supabase.table("products_v2").delete().eq("id", prod_row_del["id"]).execute()
+                        st.success("Producto eliminado correctamente")
+                        get_products.clear()
+                        time.sleep(0.5)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error al eliminar producto: {e}")
+                
+                if not confirmado:
+                    st.caption("Debes marcar la casilla de confirmación para habilitar el botón.")
 
     st.markdown("---")
     st.subheader("Catálogo actual")
@@ -1173,20 +1200,17 @@ elif menu == "💰 Ventas":
                         confirmado = st.checkbox("Confirmo que deseo anular esta factura")
                         col_confirm, col_cancel = st.columns(2)
                         with col_confirm:
-                            if st.button("Sí, anular definitivamente"):
-                                if confirmado:
-                                    try:
-                                        supabase.table("invoices_v2").update({"status": "anulada"}).eq("id", fact_id).execute()
-                                        auditar_factura(fact_id, "anulada", factura_row.get("hash", ""), user_id)
-                                        st.success("Factura anulada correctamente")
-                                        st.session_state.confirmar_anulacion = False
-                                        st.session_state.factura_a_anular = None
-                                        get_invoices.clear()
-                                        st.rerun()
-                                    except Exception as e:
-                                        st.error(f"Error al anular factura: {e}")
-                                else:
-                                    st.error("Debes marcar la casilla de confirmación.")
+                            if st.button("Sí, anular definitivamente", disabled=not confirmado):
+                                try:
+                                    supabase.table("invoices_v2").update({"status": "anulada"}).eq("id", fact_id).execute()
+                                    auditar_factura(fact_id, "anulada", factura_row.get("hash", ""), user_id)
+                                    st.success("Factura anulada correctamente")
+                                    st.session_state.confirmar_anulacion = False
+                                    st.session_state.factura_a_anular = None
+                                    get_invoices.clear()
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error al anular factura: {e}")
                         with col_cancel:
                             if st.button("Cancelar"):
                                 st.session_state.confirmar_anulacion = False
@@ -1370,18 +1394,25 @@ elif menu == "🛒 Compras":
                     }
                     st.rerun()
             with col2:
-                if st.button("🗑️ Eliminar gasto"):
-                    confirmado = st.checkbox("Confirmo que deseo eliminar este gasto", key="confirm_delete_gasto")
-                    if confirmado:
-                        try:
-                            supabase.table("expenses_v2").delete().eq("id", gasto_row["id"]).execute()
-                            st.success("Gasto eliminado correctamente")
-                            get_expenses.clear()
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Error al eliminar gasto: {e}")
-                    else:
-                        st.error("Debes marcar la casilla de confirmación para eliminar.")
+                confirmado = st.checkbox(
+                    "Confirmo que deseo eliminar este gasto",
+                    key=f"confirm_delete_gasto_{gasto_row['id']}"
+                )
+                if st.button(
+                    "🗑️ Eliminar gasto",
+                    key=f"delete_gasto_btn_{gasto_row['id']}",
+                    disabled=not confirmado
+                ):
+                    try:
+                        supabase.table("expenses_v2").delete().eq("id", gasto_row["id"]).execute()
+                        st.success("Gasto eliminado correctamente")
+                        get_expenses.clear()
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error al eliminar gasto: {e}")
+                
+                if not confirmado:
+                    st.caption("Debes marcar la casilla de confirmación para habilitar el botón.")
     else:
         st.info("No hay gastos registrados.")
 
@@ -1803,7 +1834,7 @@ elif menu == "📊 Dashboards":
                 st.pyplot(fig)
 
 # ------------------------------------------------------------
-# PRESUPUESTOS (con selección nativa y envío por email)
+# PRESUPUESTOS (con selección nativa y eliminación corregida)
 # ------------------------------------------------------------
 elif menu == "📝 Presupuestos":
     st.title("📝 Presupuestos")
@@ -2254,7 +2285,7 @@ elif menu == "📝 Presupuestos":
                     st.session_state.edit_budget_data = None
                     st.rerun()
 
-    # ============ PESTAÑA HISTORIAL ============
+    # ============ PESTAÑA HISTORIAL (con eliminación corregida) ============
     with tab_historial:
         st.subheader("Presupuestos guardados")
         budgets_df = get_budgets(user_id)
@@ -2393,18 +2424,27 @@ elif menu == "📝 Presupuestos":
                         st.rerun()
                 
                 with col4:
-                    if st.button("🗑️ Eliminar", key=f"del_{budget_id}"):
-                        confirmado = st.checkbox("Confirmar eliminación", key=f"confirm_del_{budget_id}")
-                        if confirmado:
-                            try:
-                                supabase.table("budgets").delete().eq("id", budget_id).execute()
-                                st.success("Presupuesto eliminado.")
-                                get_budgets.clear()
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Error al eliminar presupuesto: {e}")
-                        else:
-                            st.error("Debes marcar la casilla de confirmación.")
+                    confirmado = st.checkbox(
+                        "Confirmar eliminación",
+                        key=f"confirm_del_{budget_id}"
+                    )
+                    
+                    if st.button(
+                        "🗑️ Eliminar",
+                        key=f"del_{budget_id}",
+                        disabled=not confirmado
+                    ):
+                        try:
+                            supabase.table("budgets").delete().eq("id", budget_id).execute()
+                            st.success("Presupuesto eliminado.")
+                            get_budgets.clear()
+                            time.sleep(0.5)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error al eliminar presupuesto: {e}")
+                    
+                    if not confirmado:
+                        st.caption("Debes marcar la casilla para habilitar el botón.")
         else:
             st.info("No hay presupuestos guardados aún.")
 
