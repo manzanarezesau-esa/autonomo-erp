@@ -222,8 +222,8 @@ def firmar_facturae_xml(xml_input, certificado_p12, password_certificado, usar_t
         # Si se solicita timestamp, añadir XAdES-T
         if usar_timestamp:
             try:
-                # Serializar el XML firmado para calcular el hash
-                signed_data = etree.tostring(signed_xml, encoding='utf-8', method='c14n')
+                # ✅ CORREGIDO: Eliminado encoding='utf-8' porque C14N ya maneja UTF-8
+                signed_data = etree.tostring(signed_xml, method='c14n')
                 
                 # Obtener timestamp de la TSA
                 timestamp_token = obtener_timestamp(signed_data)
