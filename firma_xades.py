@@ -4,6 +4,7 @@ from lxml import etree
 import base64
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.serialization import pkcs12
+from signxml import XMLSigner, methods
 
 
 def cargar_certificado_p12(p12_content, password_input):
@@ -65,12 +66,12 @@ def cargar_certificado_p12(p12_content, password_input):
         ) from e
 
 
-def firmar_facturae_xml(xml_str, certificado_p12, password_certificado):
+def firmar_facturae_xml(xml_input, certificado_p12, password_certificado):
     """
     Firma un XML FacturaE con XAdES-EPES.
     
     Parámetros:
-    - xml_str: String del XML FacturaE sin firmar
+    - xml_input: String del XML FacturaE sin firmar (str, bytes o Element)
     - certificado_p12: Bytes del certificado .p12/.pfx o Base64
     - password_certificado: Contraseña del certificado
     
@@ -93,19 +94,16 @@ def firmar_facturae_xml(xml_str, certificado_p12, password_certificado):
         
         cert_pem = certificate.public_bytes(serialization.Encoding.PEM)
         
-        # Parsear XML
-        xml_root = etree.fromstring(xml_str.encode('utf-8'))
+        # Asegurar que tenemos un Element XML (no string)
+        if isinstance(xml_input, (str, bytes)):
+            xml_root = etree.fromstring(xml_input.encode('utf-8') if isinstance(xml_input, str) else xml_input)
+        else:
+            xml_root = xml_input
         
-        # Importar signxml aquí para evitar errores si no está instalado
-        try:
-            from signxml import XMLSigner
-        except ImportError:
-            st.error("La librería signxml no está instalada. Ejecuta: pip install signxml")
-            return xml_str
-        
-        # Configurar firmador XAdES
+        # Configurar firmador XAdES con el método correcto
+        # ✅ CORRECTO: Usar el enum methods.enveloped de la librería signxml
         signer = XMLSigner(
-            method=etree.parse,
+            method=methods.enveloped,  # Método enveloped signature (estándar para XAdES)
             signature_algorithm="rsa-sha256",
             digest_algorithm="sha256",
             c14n_algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"
@@ -126,10 +124,13 @@ def firmar_facturae_xml(xml_str, certificado_p12, password_certificado):
     except ValueError as e:
         # Error específico de certificado (contraseña incorrecta, archivo inválido)
         st.error(f"Error de certificado: {str(e)}")
-        return xml_str
+        return xml_input if isinstance(xml_input, str) else etree.tostring(xml_input, encoding='utf-8').decode('utf-8')
+    except ImportError as e:
+        st.error(f"Librería no instalada: {str(e)}")
+        return xml_input if isinstance(xml_input, str) else etree.tostring(xml_input, encoding='utf-8').decode('utf-8')
     except Exception as e:
         st.warning(f"No se pudo firmar el XML: {str(e)}")
-        return xml_str
+        return xml_input if isinstance(xml_input, str) else etree.tostring(xml_input, encoding='utf-8').decode('utf-8')
 
 
 def cargar_certificado_desde_secrets():
