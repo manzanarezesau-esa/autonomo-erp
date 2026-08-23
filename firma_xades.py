@@ -31,7 +31,6 @@ def crear_timestamp_request(data_to_timestamp):
     - Petición timestamp en formato DER (bytes)
     """
     try:
-        # ✅ CORRECTO: Importar desde Crypto (no desde pycryptodome)
         from Crypto.Hash import SHA256
     except ImportError:
         st.error("La librería pycryptodome no está instalada. Ejecuta: pip install pycryptodome")
@@ -41,55 +40,24 @@ def crear_timestamp_request(data_to_timestamp):
     hash_obj = SHA256.new(data_to_timestamp)
     digest = hash_obj.digest()
     
-    # Crear petición TimestampRequest (RFC 3161)
-    # Usamos una construcción manual mínima con DER
-    try:
-        from Crypto.Util.asn1 import DerSequence
-    except ImportError:
-        # Fallback: construcción manual del DER
-        # MessageImprint: SEQUENCE { SEQUENCE { OID, OCTET STRING } }
-        # OID para SHA-256: 2.16.840.1.101.3.4.2.1
-        oid_sha256 = bytes([0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01])
-        octet_string = bytes([0x04, 0x20]) + digest
-        
-        # SEQUENCE interna
-        inner_seq = bytes([0x30, len(oid_sha256) + len(octet_string)]) + oid_sha256 + octet_string
-        
-        # TimestampRequest completo
-        request = bytes([0x30, len(inner_seq) + 2]) + bytes([0x02, 0x01, 0x01]) + inner_seq + bytes([0x01, 0x01, 0x00])
-        
-        return request
+    # Construcción manual del DER (TimestampRequest RFC 3161)
+    # OID para SHA-256: 2.16.840.1.101.3.4.2.1
+    oid_sha256 = bytes([0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01])
+    octet_string = bytes([0x04, 0x20]) + digest
     
-    # Construcción con DerSequence
-    try:
-        # MessageImprint
-        message_imprint = DerSequence([
-            DerSequence([
-                # OID para SHA-256 (DER encoded)
-                bytes([0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01]),
-                # OCTET STRING con el hash
-                bytes([0x04, 0x20]) + digest
-            ])
-        ])
-        
-        # TimestampRequest (sin nonce para simplificar)
-        request = DerSequence([
-            bytes([0x02, 0x01, 0x01]),  # version = 1
-            message_imprint.encode(),
-            bytes([0x01, 0x01, 0x00])   # certReq = false
-        ])
-        
-        return request.encode()
-    except Exception:
-        # Si falla DerSequence, usar construcción manual
-        oid_sha256 = bytes([0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01])
-        octet_string = bytes([0x04, 0x20]) + digest
-        
-        inner_seq = bytes([0x30, len(oid_sha256) + len(octet_string)]) + oid_sha256 + octet_string
-        
-        request = bytes([0x30, len(inner_seq) + 2]) + bytes([0x02, 0x01, 0x01]) + inner_seq + bytes([0x01, 0x01, 0x00])
-        
-        return request
+    # SEQUENCE interna: MessageImprint
+    inner_seq = bytes([0x30, len(oid_sha256) + len(octet_string)]) + oid_sha256 + octet_string
+    
+    # TimestampRequest completo:
+    # SEQUENCE { INTEGER version, SEQUENCE messageImprint, BOOLEAN certReq }
+    request = (
+        bytes([0x30, len(inner_seq) + 5]) +   # Longitud total
+        bytes([0x02, 0x01, 0x01]) +           # version = 1
+        inner_seq +                            # MessageImprint
+        bytes([0x01, 0x01, 0x00])              # certReq = false
+    )
+    
+    return request
 
 
 def obtener_timestamp(data_to_timestamp, tsa_url=None):
@@ -247,8 +215,8 @@ def firmar_facturae_xml(xml_input, certificado_p12, password_certificado, usar_t
         # Si se solicita timestamp, añadir XAdES-T
         if usar_timestamp:
             try:
-                # Serializar el XML firmado para calcular el hash
-                signed_data = etree.tostring(signed_xml, encoding='utf-8', method='c14n')
+                # ✅ CORRECTO: Sin encoding en C14N (devuelve bytes)
+                signed_data = etree.tostring(signed_xml, method='c14n')
                 
                 # Obtener timestamp de la TSA
                 timestamp_token = obtener_timestamp(signed_data)
@@ -320,7 +288,7 @@ def firmar_facturae_xml(xml_input, certificado_p12, password_certificado, usar_t
             except Exception as e:
                 st.warning(f"Error al añadir timestamp: {str(e)}. La firma será XAdES-EPES (sin timestamp).")
         
-        # Convertir a string
+        # Convertir a string (aquí SÍ usamos encoding porque NO es C14N)
         result = etree.tostring(signed_xml, encoding='utf-8', xml_declaration=True, pretty_print=True)
         return result.decode('utf-8')
         
