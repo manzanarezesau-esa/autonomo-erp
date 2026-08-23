@@ -2,6 +2,7 @@
 import streamlit as st
 from lxml import etree
 import base64
+import uuid
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.serialization import pkcs12
 from signxml import XMLSigner, methods
@@ -100,8 +101,12 @@ def firmar_facturae_xml(xml_input, certificado_p12, password_certificado):
         else:
             xml_root = xml_input
         
+        # ✅ ASIGNAR UN ID ÚNICO AL NODO RAÍZ
+        # Esto es necesario para que signxml pueda resolver la referencia URI
+        root_id = f"Facturae-{uuid.uuid4().hex[:16]}"
+        xml_root.set("Id", root_id)
+        
         # Configurar firmador XAdES con el método correcto
-        # ✅ CORRECTO: Usar el enum methods.enveloped de la librería signxml
         signer = XMLSigner(
             method=methods.enveloped,  # Método enveloped signature (estándar para XAdES)
             signature_algorithm="rsa-sha256",
@@ -109,12 +114,12 @@ def firmar_facturae_xml(xml_input, certificado_p12, password_certificado):
             c14n_algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"
         )
         
-        # Firmar el XML
+        # ✅ Firmar el XML con reference_uri apuntando al Id del nodo raíz
         signed_xml = signer.sign(
             xml_root,
             key=private_key_pem,
             cert=cert_pem,
-            reference_uri=""
+            reference_uri=f"#{root_id}"  # Referencia al Id asignado
         )
         
         # Convertir a string
