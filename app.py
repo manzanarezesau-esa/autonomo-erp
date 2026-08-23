@@ -27,6 +27,10 @@ from data_service import (
     get_invoices, get_clients, get_suppliers, get_products, get_expenses,
     get_bank_transactions, get_recurring_invoices, get_budgets, get_journal_entries
 )
+from certificate_manager import (
+    guardar_certificado_usuario, obtener_certificado_usuario,
+    eliminar_certificado_usuario, tiene_certificado
+)
 
 st.set_page_config(page_title="Hondureformas ERP", page_icon="🏗️", layout="wide")
 
@@ -818,7 +822,7 @@ elif menu == "📦 Productos":
         st.info("No hay productos en el catálogo.")
 
 # ------------------------------------------------------------
-# VENTAS (con XAdES-T, validación XSD y Veri*Factu)
+# VENTAS (con XAdES-T, validación XSD y certificado por usuario)
 # ------------------------------------------------------------
 elif menu == "💰 Ventas":
     st.title("Facturas de Venta")
@@ -1176,25 +1180,23 @@ elif menu == "💰 Ventas":
                     
                     if st.button("📄 Descargar XML FacturaE", key=f"xml_{fact_id}"):
                         from facturae_utils import generar_facturae_xml
-                        from firma_xades import cargar_certificado_desde_secrets
                         
-                        certificado, password = cargar_certificado_desde_secrets()
-                        
-                        if certificado and password:
+                        if tiene_certificado(user_id):
                             xml_str = generar_facturae_xml(
                                 factura_row, cliente, company_config, lineas_fact_list,
-                                firmar=True, certificado=certificado, password=password,
+                                user_id=user_id,
+                                firmar=True,
                                 validar=True,
                                 usar_timestamp=True
                             )
-                            st.success("XML firmado con XAdES-T (timestamp aplicado)")
+                            st.success("XML firmado con XAdES-T usando tu certificado")
                         else:
                             xml_str = generar_facturae_xml(
                                 factura_row, cliente, company_config, lineas_fact_list,
                                 firmar=False,
                                 validar=True
                             )
-                            st.warning("XML sin firma (no hay certificado configurado)")
+                            st.warning("XML sin firma. Configura tu certificado en Configuración.")
                         
                         st.download_button(
                             "Descargar XML",
@@ -2504,7 +2506,7 @@ elif menu == "👥 Colaboradores":
     st.info("Funcionalidad en desarrollo.")
 
 # ------------------------------------------------------------
-# CONFIGURACIÓN (sin cambios)
+# CONFIGURACIÓN (con gestión de certificado digital)
 # ------------------------------------------------------------
 elif menu == "⚙️ Configuración":
     st.title("Configuración de empresa y plantillas")
@@ -2579,6 +2581,53 @@ elif menu == "⚙️ Configuración":
                         st.rerun()
                     except Exception as e:
                         st.error(f"Error al guardar configuración: {e}")
+
+    # ============ GESTIÓN DE CERTIFICADO DIGITAL ============
+    st.markdown("---")
+    st.subheader("🔐 Certificado Digital para Firma Electrónica")
+    
+    tiene_cert = tiene_certificado(user_id)
+    
+    if tiene_cert:
+        st.success("✅ Tienes un certificado configurado")
+        
+        # Botón para eliminar
+        if st.button("🗑️ Eliminar certificado actual"):
+            confirmado = st.checkbox("Confirmo que deseo eliminar mi certificado")
+            if confirmado:
+                if eliminar_certificado_usuario(user_id):
+                    st.success("Certificado eliminado correctamente")
+                    st.rerun()
+    
+    # Subir nuevo certificado
+    st.markdown("**Subir certificado (.p12 o .pfx)**")
+    archivo_cert = st.file_uploader("Archivo del certificado", type=["p12", "pfx"])
+    password_cert = st.text_input("Contraseña del certificado", type="password")
+    
+    if st.button("💾 Guardar certificado"):
+        if archivo_cert is None:
+            st.error("Debes subir un archivo de certificado.")
+        elif not password_cert:
+            st.error("Debes introducir la contraseña del certificado.")
+        else:
+            try:
+                certificado_bytes = archivo_cert.getvalue()
+                
+                # Verificar que el certificado es válido
+                from firma_xades import cargar_certificado_p12
+                try:
+                    cargar_certificado_p12(certificado_bytes, password_cert)
+                    st.success("✅ Certificado válido")
+                except Exception as e:
+                    st.error(f"El certificado no es válido: {str(e)}")
+                    st.stop()
+                
+                # Guardar certificado
+                if guardar_certificado_usuario(user_id, certificado_bytes, password_cert):
+                    st.success("Certificado guardado correctamente")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Error al guardar certificado: {str(e)}")
 
     st.markdown("---")
     if st.button("Probar plantilla factura"):
