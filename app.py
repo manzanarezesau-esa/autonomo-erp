@@ -818,7 +818,7 @@ elif menu == "📦 Productos":
         st.info("No hay productos en el catálogo.")
 
 # ------------------------------------------------------------
-# VENTAS (con selección nativa, XML firmado y Veri*Factu)
+# VENTAS (con selección nativa, XML firmado, validación XSD y Veri*Factu)
 # ------------------------------------------------------------
 elif menu == "💰 Ventas":
     st.title("Facturas de Venta")
@@ -1183,13 +1183,15 @@ elif menu == "💰 Ventas":
                         if certificado and password:
                             xml_str = generar_facturae_xml(
                                 factura_row, cliente, company_config, lineas_fact_list,
-                                firmar=True, certificado=certificado, password=password
+                                firmar=True, certificado=certificado, password=password,
+                                validar=True
                             )
                             st.success("XML firmado con XAdES-EPES")
                         else:
                             xml_str = generar_facturae_xml(
                                 factura_row, cliente, company_config, lineas_fact_list,
-                                firmar=False
+                                firmar=False,
+                                validar=True
                             )
                             st.warning("XML sin firma (no hay certificado configurado)")
                         
