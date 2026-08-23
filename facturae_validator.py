@@ -1,76 +1,53 @@
 # facturae_validator.py
 import streamlit as st
 from lxml import etree
-import os
-import requests
-import tempfile
+from schema_facturae import XSD_SCHEMA_TEXT
 
-# URL del esquema XSD oficial de FacturaE v3.2.2
-XSD_URL = "https://www.facturae.gob.es/formato/Versiones/Facturaev3_2_2.xsd"
-
-# Caché del esquema para no descargarlo cada vez
+# Caché del esquema para no recargarlo cada vez
 _xsd_cache = {}
 
 
 def obtener_esquema_xsd():
     """
-    Descarga y cachea el esquema XSD oficial de FacturaE v3.2.2.
+    Carga el esquema XSD desde el string embebido en schema_facturae.py.
     
     Retorna:
-    - Objeto XMLSchema de lxml o None si no se pudo descargar
+    - Objeto XMLSchema de lxml o None si no se pudo cargar
     """
     if "schema" in _xsd_cache:
         return _xsd_cache["schema"]
     
     try:
-        # Intentar descargar el XSD
-        response = requests.get(XSD_URL, timeout=30)
-        if response.status_code == 200:
-            xsd_content = response.content
-            
-            # Guardar temporalmente para lxml
-            with tempfile.NamedTemporaryFile(suffix=".xsd", delete=False) as temp_file:
-                temp_file.write(xsd_content)
-                temp_path = temp_file.name
-            
-            try:
-                # Crear schema desde el archivo temporal
-                with open(temp_path, 'rb') as f:
-                    schema_doc = etree.parse(f)
-                schema = etree.XMLSchema(schema_doc)
-                
-                # Guardar en caché
-                _xsd_cache["schema"] = schema
-                return schema
-            finally:
-                # Limpiar archivo temporal
-                if os.path.exists(temp_path):
-                    os.unlink(temp_path)
-        else:
-            st.warning(f"No se pudo descargar el esquema XSD (HTTP {response.status_code})")
-            return None
+        # Parsear el XSD desde el string embebido
+        schema_doc = etree.fromstring(XSD_SCHEMA_TEXT.encode('utf-8'))
+        schema = etree.XMLSchema(schema_doc)
+        
+        # Guardar en caché
+        _xsd_cache["schema"] = schema
+        return schema
+        
+    except etree.XMLSchemaParseError as e:
+        st.error(f"Error al parsear el esquema XSD embebido: {str(e)}")
+        return None
     except Exception as e:
-        st.warning(f"Error al descargar el esquema XSD: {str(e)}")
+        st.error(f"Error inesperado al cargar el esquema XSD: {str(e)}")
         return None
 
 
 def validar_xml_facturae(xml_str):
     """
-    Valida un XML FacturaE contra el esquema XSD oficial v3.2.2.
+    Valida un XML FacturaE contra el esquema XSD embebido v3.2.2.
     
     Parámetros:
     - xml_str: String del XML a validar
     
     Retorna:
     - Tupla (es_valido, lista_errores, lista_avisos)
-      - es_valido: True si cumple el esquema
-      - lista_errores: Lista de errores de validación
-      - lista_avisos: Lista de advertencias
     """
     schema = obtener_esquema_xsd()
     
     if schema is None:
-        return False, ["No se pudo obtener el esquema XSD para validar."], []
+        return False, ["No se pudo cargar el esquema XSD embebido."], []
     
     try:
         # Parsear el XML
@@ -140,7 +117,7 @@ def validacion_manual_rapida(xml_str):
 
 def validar_facturae_completo(xml_str):
     """
-    Valida el XML FacturaE con XSD y validación manual de respaldo.
+    Valida el XML FacturaE con XSD embebido y validación manual de respaldo.
     
     Parámetros:
     - xml_str: String del XML a validar
@@ -148,7 +125,7 @@ def validar_facturae_completo(xml_str):
     Retorna:
     - (es_valido, mensaje_resultado)
     """
-    # 1. Intentar validación con XSD oficial
+    # 1. Intentar validación con XSD embebido
     es_valido_xsd, errores_xsd, avisos_xsd = validar_xml_facturae(xml_str)
     
     if es_valido_xsd:
@@ -161,7 +138,7 @@ def validar_facturae_completo(xml_str):
     
     if errores_xsd:
         mensajes.append("**Errores de validación XSD:**")
-        for error in errores_xsd[:10]:  # Mostrar máximo 10 errores
+        for error in errores_xsd[:10]:
             mensajes.append(f"  • {error}")
         if len(errores_xsd) > 10:
             mensajes.append(f"  • ... y {len(errores_xsd) - 10} errores más")
