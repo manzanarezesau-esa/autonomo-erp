@@ -11,3 +11,4 @@ weasyprint
 signxml
 cryptography
 lxml
+pycryptodome
