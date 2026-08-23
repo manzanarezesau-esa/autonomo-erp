@@ -6,10 +6,10 @@ from firma_xades import firmar_facturae_xml
 from facturae_validator import validar_facturae_completo
 
 
-def generar_facturae_xml(invoice, client, company, lineas, firmar=False, certificado=None, password=None, validar=True):
+def generar_facturae_xml(invoice, client, company, lineas, firmar=False, certificado=None, password=None, validar=True, usar_timestamp=False):
     """
     Genera un XML compatible con FacturaE v3.2.2.
-    Opcionalmente valida y firma con XAdES-EPES.
+    Opcionalmente valida y firma con XAdES-EPES o XAdES-T.
     
     Parámetros:
     - invoice: Diccionario con datos de la factura
@@ -20,6 +20,7 @@ def generar_facturae_xml(invoice, client, company, lineas, firmar=False, certifi
     - certificado: Bytes del certificado P12
     - password: Contraseña del certificado
     - validar: Boolean para validar contra XSD antes de firmar
+    - usar_timestamp: Boolean para añadir timestamp XAdES-T (True) o XAdES-EPES (False)
     
     Retorna:
     - XML generado (firmado si se solicita) como string
@@ -98,13 +99,17 @@ def generar_facturae_xml(invoice, client, company, lineas, firmar=False, certifi
         
         if not es_valido:
             st.error(f"### El XML no cumple con el esquema FacturaE v3.2.2\n\n{mensaje}")
-            # Mostrar advertencia pero continuar (el usuario puede decidir)
             st.warning("Puede descargar el XML sin validar, pero no será válido oficialmente.")
         else:
             st.success("✅ XML validado correctamente contra el esquema oficial FacturaE v3.2.2")
     
     # Firmar si se solicita
     if firmar and certificado and password:
-        pretty_xml = firmar_facturae_xml(pretty_xml, certificado, password)
+        pretty_xml = firmar_facturae_xml(
+            pretty_xml,
+            certificado,
+            password,
+            usar_timestamp=usar_timestamp  # ← Pasar el parámetro correctamente
+        )
     
     return pretty_xml
