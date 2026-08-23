@@ -276,7 +276,7 @@ if menu == "🏠 Salpicadero":
     col_f3.metric("Promedio por factura", money(bv/num_facturas) if num_facturas > 0 else "0.00 €")
 
 # ------------------------------------------------------------
-# CLIENTES (con selección nativa)
+# CLIENTES (con selección nativa y validación de límites)
 # ------------------------------------------------------------
 elif menu == "👥 Clientes":
     st.title("Gestión de Clientes")
@@ -339,39 +339,44 @@ elif menu == "👥 Clientes":
                 key="clientes_edit_table"
             )
             
-            if event.selection and event.selection.rows:
+            if (event.selection and event.selection.rows and len(event.selection.rows) > 0):
                 selected_row = event.selection.rows[0]
-                cliente_row = clientes_df.iloc[selected_row]
-                
-                st.markdown("---")
-                st.subheader(f"Editando: **{cliente_row['name']}**")
-                
-                with st.form("edit_client_form"):
-                    nuevo_nombre = st.text_input("Nombre", value=cliente_row["name"])
-                    nuevo_nif = st.text_input("NIF", value=cliente_row["tax_id"])
-                    nueva_direccion = st.text_input("Dirección", value=cliente_row["address"])
-                    nuevo_tipo = st.radio("Tipo de cliente", ["Empresa (B2B)", "Particular (B2C)"],
-                                          index=0 if cliente_row.get("type") == "b2b" else 1,
-                                          horizontal=True)
+                if selected_row is not None and 0 <= selected_row < len(clientes_df):
+                    cliente_row = clientes_df.iloc[selected_row]
+                    
+                    st.markdown("---")
+                    st.subheader(f"Editando: **{cliente_row['name']}**")
+                    
+                    with st.form("edit_client_form"):
+                        nuevo_nombre = st.text_input("Nombre", value=cliente_row["name"])
+                        nuevo_nif = st.text_input("NIF", value=cliente_row["tax_id"])
+                        nueva_direccion = st.text_input("Dirección", value=cliente_row["address"])
+                        nuevo_tipo = st.radio("Tipo de cliente", ["Empresa (B2B)", "Particular (B2C)"],
+                                              index=0 if cliente_row.get("type") == "b2b" else 1,
+                                              horizontal=True)
 
-                    if st.form_submit_button("Guardar cambios"):
-                        nif_val = (nuevo_nif or "").strip()
-                        if nif_val and not validar_nif_cif(nif_val):
-                            st.error("El NIF/CIF introducido no es válido.")
-                        else:
-                            try:
-                                supabase.table("clients_v2").update({
-                                    "name": nuevo_nombre.strip(),
-                                    "tax_id": nif_val,
-                                    "address": nueva_direccion.strip(),
-                                    "type": "b2b" if "B2B" in nuevo_tipo else "b2c"
-                                }).eq("id", cliente_row["id"]).execute()
-                                st.success("Cliente actualizado correctamente")
-                                get_clients.clear()
-                                time.sleep(0.5)
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Error al actualizar cliente: {e}")
+                        if st.form_submit_button("Guardar cambios"):
+                            nif_val = (nuevo_nif or "").strip()
+                            if nif_val and not validar_nif_cif(nif_val):
+                                st.error("El NIF/CIF introducido no es válido.")
+                            else:
+                                try:
+                                    supabase.table("clients_v2").update({
+                                        "name": nuevo_nombre.strip(),
+                                        "tax_id": nif_val,
+                                        "address": nueva_direccion.strip(),
+                                        "type": "b2b" if "B2B" in nuevo_tipo else "b2c"
+                                    }).eq("id", cliente_row["id"]).execute()
+                                    st.success("Cliente actualizado correctamente")
+                                    get_clients.clear()
+                                    time.sleep(0.5)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error al actualizar cliente: {e}")
+                else:
+                    st.info("Selecciona un cliente válido de la tabla.")
+            else:
+                st.info("Haz clic en una fila para seleccionar un cliente.")
 
     with tab_del:
         if clientes_df.empty:
@@ -396,33 +401,38 @@ elif menu == "👥 Clientes":
                 key="clientes_del_table"
             )
             
-            if event.selection and event.selection.rows:
+            if (event.selection and event.selection.rows and len(event.selection.rows) > 0):
                 selected_row = event.selection.rows[0]
-                cliente_row_del = clientes_df.iloc[selected_row]
-                
-                st.warning(f"⚠️ Vas a eliminar al cliente: **{cliente_row_del['name']}**")
-                
-                confirmado = st.checkbox(
-                    "Confirmo que deseo eliminar este cliente",
-                    key=f"confirm_delete_client_{cliente_row_del['id']}"
-                )
-                
-                if st.button(
-                    "🗑️ Eliminar definitivamente",
-                    key=f"delete_client_btn_{cliente_row_del['id']}",
-                    disabled=not confirmado
-                ):
-                    try:
-                        supabase.table("clients_v2").delete().eq("id", cliente_row_del["id"]).execute()
-                        st.success("Cliente eliminado correctamente")
-                        get_clients.clear()
-                        time.sleep(0.5)
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error al eliminar cliente: {e}")
-                
-                if not confirmado:
-                    st.caption("Debes marcar la casilla de confirmación para habilitar el botón.")
+                if selected_row is not None and 0 <= selected_row < len(clientes_df):
+                    cliente_row_del = clientes_df.iloc[selected_row]
+                    
+                    st.warning(f"⚠️ Vas a eliminar al cliente: **{cliente_row_del['name']}**")
+                    
+                    confirmado = st.checkbox(
+                        "Confirmo que deseo eliminar este cliente",
+                        key=f"confirm_delete_client_{cliente_row_del['id']}"
+                    )
+                    
+                    if st.button(
+                        "🗑️ Eliminar definitivamente",
+                        key=f"delete_client_btn_{cliente_row_del['id']}",
+                        disabled=not confirmado
+                    ):
+                        try:
+                            supabase.table("clients_v2").delete().eq("id", cliente_row_del["id"]).execute()
+                            st.success("Cliente eliminado correctamente")
+                            get_clients.clear()
+                            time.sleep(0.5)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error al eliminar cliente: {e}")
+                    
+                    if not confirmado:
+                        st.caption("Debes marcar la casilla de confirmación para habilitar el botón.")
+                else:
+                    st.info("Selecciona un cliente válido de la tabla.")
+            else:
+                st.info("Haz clic en una fila para seleccionar un cliente.")
 
     st.markdown("---")
     st.subheader("Listado de clientes")
@@ -448,7 +458,7 @@ elif menu == "👥 Clientes":
         st.info("No hay clientes registrados.")
 
 # ------------------------------------------------------------
-# PROVEEDORES (con selección nativa y eliminación corregida)
+# PROVEEDORES (con selección nativa y validación de límites)
 # ------------------------------------------------------------
 elif menu == "🤝 Proveedores":
     st.title("Gestión de Proveedores")
@@ -507,35 +517,40 @@ elif menu == "🤝 Proveedores":
                 key="proveedores_edit_table"
             )
             
-            if event.selection and event.selection.rows:
+            if (event.selection and event.selection.rows and len(event.selection.rows) > 0):
                 selected_row = event.selection.rows[0]
-                prov_row = proveedores_df.iloc[selected_row]
-                
-                st.markdown("---")
-                st.subheader(f"Editando: **{prov_row['name']}**")
-                
-                with st.form("edit_supplier_form"):
-                    nuevo_nombre = st.text_input("Nombre", value=prov_row["name"])
-                    nuevo_nif = st.text_input("NIF", value=prov_row["tax_id"])
-                    nueva_direccion = st.text_input("Dirección", value=prov_row["address"])
+                if selected_row is not None and 0 <= selected_row < len(proveedores_df):
+                    prov_row = proveedores_df.iloc[selected_row]
+                    
+                    st.markdown("---")
+                    st.subheader(f"Editando: **{prov_row['name']}**")
+                    
+                    with st.form("edit_supplier_form"):
+                        nuevo_nombre = st.text_input("Nombre", value=prov_row["name"])
+                        nuevo_nif = st.text_input("NIF", value=prov_row["tax_id"])
+                        nueva_direccion = st.text_input("Dirección", value=prov_row["address"])
 
-                    if st.form_submit_button("Guardar cambios"):
-                        nif_val = (nuevo_nif or "").strip()
-                        if nif_val and not validar_nif_cif(nif_val):
-                            st.error("El NIF/CIF del proveedor no es válido.")
-                        else:
-                            try:
-                                supabase.table("suppliers_v2").update({
-                                    "name": nuevo_nombre.strip(),
-                                    "tax_id": nif_val,
-                                    "address": nueva_direccion.strip()
-                                }).eq("id", prov_row["id"]).execute()
-                                st.success("Proveedor actualizado correctamente")
-                                get_suppliers.clear()
-                                time.sleep(0.5)
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Error al actualizar proveedor: {e}")
+                        if st.form_submit_button("Guardar cambios"):
+                            nif_val = (nuevo_nif or "").strip()
+                            if nif_val and not validar_nif_cif(nif_val):
+                                st.error("El NIF/CIF del proveedor no es válido.")
+                            else:
+                                try:
+                                    supabase.table("suppliers_v2").update({
+                                        "name": nuevo_nombre.strip(),
+                                        "tax_id": nif_val,
+                                        "address": nueva_direccion.strip()
+                                    }).eq("id", prov_row["id"]).execute()
+                                    st.success("Proveedor actualizado correctamente")
+                                    get_suppliers.clear()
+                                    time.sleep(0.5)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error al actualizar proveedor: {e}")
+                else:
+                    st.info("Selecciona un proveedor válido de la tabla.")
+            else:
+                st.info("Haz clic en una fila para seleccionar un proveedor.")
 
     with tab_del:
         if proveedores_df.empty:
@@ -560,33 +575,38 @@ elif menu == "🤝 Proveedores":
                 key="proveedores_del_table"
             )
             
-            if event.selection and event.selection.rows:
+            if (event.selection and event.selection.rows and len(event.selection.rows) > 0):
                 selected_row = event.selection.rows[0]
-                prov_row_del = proveedores_df.iloc[selected_row]
-                
-                st.warning(f"⚠️ Vas a eliminar al proveedor: **{prov_row_del['name']}**")
-                
-                confirmado = st.checkbox(
-                    "Confirmo que deseo eliminar este proveedor",
-                    key=f"confirm_delete_supplier_{prov_row_del['id']}"
-                )
-                
-                if st.button(
-                    "🗑️ Eliminar definitivamente",
-                    key=f"delete_supplier_btn_{prov_row_del['id']}",
-                    disabled=not confirmado
-                ):
-                    try:
-                        supabase.table("suppliers_v2").delete().eq("id", prov_row_del["id"]).execute()
-                        st.success("Proveedor eliminado correctamente")
-                        get_suppliers.clear()
-                        time.sleep(0.5)
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error al eliminar proveedor: {e}")
-                
-                if not confirmado:
-                    st.caption("Debes marcar la casilla de confirmación para habilitar el botón.")
+                if selected_row is not None and 0 <= selected_row < len(proveedores_df):
+                    prov_row_del = proveedores_df.iloc[selected_row]
+                    
+                    st.warning(f"⚠️ Vas a eliminar al proveedor: **{prov_row_del['name']}**")
+                    
+                    confirmado = st.checkbox(
+                        "Confirmo que deseo eliminar este proveedor",
+                        key=f"confirm_delete_supplier_{prov_row_del['id']}"
+                    )
+                    
+                    if st.button(
+                        "🗑️ Eliminar definitivamente",
+                        key=f"delete_supplier_btn_{prov_row_del['id']}",
+                        disabled=not confirmado
+                    ):
+                        try:
+                            supabase.table("suppliers_v2").delete().eq("id", prov_row_del["id"]).execute()
+                            st.success("Proveedor eliminado correctamente")
+                            get_suppliers.clear()
+                            time.sleep(0.5)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error al eliminar proveedor: {e}")
+                    
+                    if not confirmado:
+                        st.caption("Debes marcar la casilla de confirmación para habilitar el botón.")
+                else:
+                    st.info("Selecciona un proveedor válido de la tabla.")
+            else:
+                st.info("Haz clic en una fila para seleccionar un proveedor.")
 
     st.markdown("---")
     st.subheader("Listado de proveedores")
@@ -610,7 +630,7 @@ elif menu == "🤝 Proveedores":
         st.info("No hay proveedores registrados.")
 
 # ------------------------------------------------------------
-# PRODUCTOS (con selección nativa y eliminación corregida)
+# PRODUCTOS (con selección nativa y validación de límites)
 # ------------------------------------------------------------
 elif menu == "📦 Productos":
     st.title("Catálogo de Productos / Servicios")
@@ -679,38 +699,43 @@ elif menu == "📦 Productos":
                 key="productos_edit_table"
             )
             
-            if event.selection and event.selection.rows:
+            if (event.selection and event.selection.rows and len(event.selection.rows) > 0):
                 selected_row = event.selection.rows[0]
-                prod_row = productos_df.iloc[selected_row]
-                
-                st.markdown("---")
-                st.subheader(f"Editando: **{prod_row['name']}**")
-                
-                with st.form("edit_product_form"):
-                    nuevo_nombre = st.text_input("Nombre", value=prod_row["name"])
-                    nueva_descripcion = st.text_area("Descripción", value=prod_row.get("description", ""))
-                    nuevo_precio = st.number_input("Precio unitario", min_value=0.0, value=float(prod_row.get("price", 0.0)), step=1.0)
-                    nuevo_vat = st.number_input("IVA por defecto (%)", value=float(prod_row.get("default_vat_percentage", 21.0)), step=1.0)
-                    nuevo_irpf = st.number_input("IRPF por defecto (%)", value=float(prod_row.get("default_irpf_percentage", 0.0)), step=1.0)
+                if selected_row is not None and 0 <= selected_row < len(productos_df):
+                    prod_row = productos_df.iloc[selected_row]
+                    
+                    st.markdown("---")
+                    st.subheader(f"Editando: **{prod_row['name']}**")
+                    
+                    with st.form("edit_product_form"):
+                        nuevo_nombre = st.text_input("Nombre", value=prod_row["name"])
+                        nueva_descripcion = st.text_area("Descripción", value=prod_row.get("description", ""))
+                        nuevo_precio = st.number_input("Precio unitario", min_value=0.0, value=float(prod_row.get("price", 0.0)), step=1.0)
+                        nuevo_vat = st.number_input("IVA por defecto (%)", value=float(prod_row.get("default_vat_percentage", 21.0)), step=1.0)
+                        nuevo_irpf = st.number_input("IRPF por defecto (%)", value=float(prod_row.get("default_irpf_percentage", 0.0)), step=1.0)
 
-                    if st.form_submit_button("Guardar cambios"):
-                        if nuevo_nombre:
-                            try:
-                                supabase.table("products_v2").update({
-                                    "name": nuevo_nombre.strip(),
-                                    "description": nueva_descripcion.strip(),
-                                    "price": nuevo_precio,
-                                    "default_vat_percentage": nuevo_vat,
-                                    "default_irpf_percentage": nuevo_irpf
-                                }).eq("id", prod_row["id"]).execute()
-                                st.success("Producto actualizado correctamente")
-                                get_products.clear()
-                                time.sleep(0.5)
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Error al actualizar producto: {e}")
-                        else:
-                            st.error("El nombre es obligatorio.")
+                        if st.form_submit_button("Guardar cambios"):
+                            if nuevo_nombre:
+                                try:
+                                    supabase.table("products_v2").update({
+                                        "name": nuevo_nombre.strip(),
+                                        "description": nueva_descripcion.strip(),
+                                        "price": nuevo_precio,
+                                        "default_vat_percentage": nuevo_vat,
+                                        "default_irpf_percentage": nuevo_irpf
+                                    }).eq("id", prod_row["id"]).execute()
+                                    st.success("Producto actualizado correctamente")
+                                    get_products.clear()
+                                    time.sleep(0.5)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error al actualizar producto: {e}")
+                            else:
+                                st.error("El nombre es obligatorio.")
+                else:
+                    st.info("Selecciona un producto válido de la tabla.")
+            else:
+                st.info("Haz clic en una fila para seleccionar un producto.")
 
     with tab_del:
         if productos_df.empty:
@@ -736,33 +761,38 @@ elif menu == "📦 Productos":
                 key="productos_del_table"
             )
             
-            if event.selection and event.selection.rows:
+            if (event.selection and event.selection.rows and len(event.selection.rows) > 0):
                 selected_row = event.selection.rows[0]
-                prod_row_del = productos_df.iloc[selected_row]
-                
-                st.warning(f"⚠️ Vas a eliminar el producto: **{prod_row_del['name']}**")
-                
-                confirmado = st.checkbox(
-                    "Confirmo que deseo eliminar este producto",
-                    key=f"confirm_delete_product_{prod_row_del['id']}"
-                )
-                
-                if st.button(
-                    "🗑️ Eliminar definitivamente",
-                    key=f"delete_product_btn_{prod_row_del['id']}",
-                    disabled=not confirmado
-                ):
-                    try:
-                        supabase.table("products_v2").delete().eq("id", prod_row_del["id"]).execute()
-                        st.success("Producto eliminado correctamente")
-                        get_products.clear()
-                        time.sleep(0.5)
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error al eliminar producto: {e}")
-                
-                if not confirmado:
-                    st.caption("Debes marcar la casilla de confirmación para habilitar el botón.")
+                if selected_row is not None and 0 <= selected_row < len(productos_df):
+                    prod_row_del = productos_df.iloc[selected_row]
+                    
+                    st.warning(f"⚠️ Vas a eliminar el producto: **{prod_row_del['name']}**")
+                    
+                    confirmado = st.checkbox(
+                        "Confirmo que deseo eliminar este producto",
+                        key=f"confirm_delete_product_{prod_row_del['id']}"
+                    )
+                    
+                    if st.button(
+                        "🗑️ Eliminar definitivamente",
+                        key=f"delete_product_btn_{prod_row_del['id']}",
+                        disabled=not confirmado
+                    ):
+                        try:
+                            supabase.table("products_v2").delete().eq("id", prod_row_del["id"]).execute()
+                            st.success("Producto eliminado correctamente")
+                            get_products.clear()
+                            time.sleep(0.5)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error al eliminar producto: {e}")
+                    
+                    if not confirmado:
+                        st.caption("Debes marcar la casilla de confirmación para habilitar el botón.")
+                else:
+                    st.info("Selecciona un producto válido de la tabla.")
+            else:
+                st.info("Haz clic en una fila para seleccionar un producto.")
 
     st.markdown("---")
     st.subheader("Catálogo actual")
@@ -1058,164 +1088,169 @@ elif menu == "💰 Ventas":
             key="facturas_table"
         )
 
-        if event.selection and event.selection.rows:
+        if (event.selection and event.selection.rows and len(event.selection.rows) > 0):
             selected_row = event.selection.rows[0]
-            factura_seleccionada = inv_df.iloc[selected_row]
-            fact_id = factura_seleccionada["id"]
-            factura_row = factura_seleccionada.to_dict()
-            estado_actual = factura_row.get("status", "pendiente")
-            
-            st.markdown("---")
-            st.subheader(f"Acciones para factura {factura_row['invoice_number']}")
-            st.write(f"Estado actual: **{estado_actual}**")
+            if selected_row is not None and 0 <= selected_row < len(inv_df):
+                factura_seleccionada = inv_df.iloc[selected_row]
+                fact_id = factura_seleccionada["id"]
+                factura_row = factura_seleccionada.to_dict()
+                estado_actual = factura_row.get("status", "pendiente")
+                
+                st.markdown("---")
+                st.subheader(f"Acciones para factura {factura_row['invoice_number']}")
+                st.write(f"Estado actual: **{estado_actual}**")
 
-            opciones_cambio = TRANSICIONES.get(estado_actual, [])
-            if opciones_cambio:
-                with st.form("cambiar_estado"):
-                    nuevo_estado = st.selectbox("Nuevo estado", opciones_cambio)
-                    if st.form_submit_button("Actualizar estado"):
+                opciones_cambio = TRANSICIONES.get(estado_actual, [])
+                if opciones_cambio:
+                    with st.form("cambiar_estado"):
+                        nuevo_estado = st.selectbox("Nuevo estado", opciones_cambio)
+                        if st.form_submit_button("Actualizar estado"):
+                            try:
+                                supabase.table("invoices_v2").update({"status": nuevo_estado}).eq("id", fact_id).execute()
+                                auditar_factura(fact_id, nuevo_estado, factura_row.get("hash", ""), user_id)
+                                st.success("Estado actualizado")
+                                get_invoices.clear()
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error al actualizar estado: {e}")
+                else:
+                    st.info("No se permiten cambios de estado para esta factura.")
+
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    cliente_id = factura_row.get("client_id")
+                    cliente = {"name": "", "tax_id": "", "address": ""}
+                    if cliente_id:
                         try:
-                            supabase.table("invoices_v2").update({"status": nuevo_estado}).eq("id", fact_id).execute()
-                            auditar_factura(fact_id, nuevo_estado, factura_row.get("hash", ""), user_id)
-                            st.success("Estado actualizado")
-                            get_invoices.clear()
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Error al actualizar estado: {e}")
-            else:
-                st.info("No se permiten cambios de estado para esta factura.")
-
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                cliente_id = factura_row.get("client_id")
-                cliente = {"name": "", "tax_id": "", "address": ""}
-                if cliente_id:
+                            cliente_res = supabase.table("clients_v2").select("name, tax_id, address").eq("id", cliente_id).execute()
+                            if cliente_res.data:
+                                cliente = cliente_res.data[0]
+                        except Exception:
+                            pass
+                    lineas_fact_df = pd.DataFrame()
                     try:
-                        cliente_res = supabase.table("clients_v2").select("name, tax_id, address").eq("id", cliente_id).execute()
-                        if cliente_res.data:
-                            cliente = cliente_res.data[0]
+                        lineas_fact = supabase.table("invoice_items").select("*").eq("invoice_id", fact_id).execute()
+                        if lineas_fact.data:
+                            lineas_fact_df = pd.DataFrame(lineas_fact.data)
                     except Exception:
                         pass
-                lineas_fact_df = pd.DataFrame()
-                try:
-                    lineas_fact = supabase.table("invoice_items").select("*").eq("invoice_id", fact_id).execute()
-                    if lineas_fact.data:
-                        lineas_fact_df = pd.DataFrame(lineas_fact.data)
-                except Exception:
-                    pass
-                lineas_fact_list = lineas_fact_df.to_dict(orient="records") if not lineas_fact_df.empty else [{
-                    "description": factura_row.get("concept", ""), "quantity": 1,
-                    "unit_price": factura_row["base_amount"], "base_amount": factura_row["base_amount"],
-                    "vat_amount": factura_row["vat_amount"], "irpf_amount": factura_row["irpf_amount"],
-                    "total": factura_row["total"]
-                }]
-                try:
-                    config_res = supabase.table("settings").select("*").eq("user_id", user_id).execute()
-                    company_config = config_res.data[0] if config_res.data else {
-                        "company_name": AUTONOMO_NAME, "company_tax_id": AUTONOMO_TAX_ID,
-                        "company_address": AUTONOMO_ADDRESS, "company_iban": AUTONOMO_IBAN,
-                        "company_logo": "", "codigo_html": "", "codigo_css": ""
-                    }
-                except Exception:
-                    company_config = {
-                        "company_name": AUTONOMO_NAME, "company_tax_id": AUTONOMO_TAX_ID,
-                        "company_address": AUTONOMO_ADDRESS, "company_iban": AUTONOMO_IBAN,
-                        "company_logo": "", "codigo_html": "", "codigo_css": ""
-                    }
-                if factura_row.get("tipo") == "rectificativa":
-                    company_config["es_rectificativa"] = True
-                    id_orig = factura_row.get("id_factura_original")
-                    if id_orig:
-                        try:
-                            orig_res = supabase.table("invoices_v2").select("invoice_number").eq("id", id_orig).single().execute()
-                            if orig_res.data:
-                                company_config["factura_original_num"] = orig_res.data["invoice_number"]
-                            else:
+                    lineas_fact_list = lineas_fact_df.to_dict(orient="records") if not lineas_fact_df.empty else [{
+                        "description": factura_row.get("concept", ""), "quantity": 1,
+                        "unit_price": factura_row["base_amount"], "base_amount": factura_row["base_amount"],
+                        "vat_amount": factura_row["vat_amount"], "irpf_amount": factura_row["irpf_amount"],
+                        "total": factura_row["total"]
+                    }]
+                    try:
+                        config_res = supabase.table("settings").select("*").eq("user_id", user_id).execute()
+                        company_config = config_res.data[0] if config_res.data else {
+                            "company_name": AUTONOMO_NAME, "company_tax_id": AUTONOMO_TAX_ID,
+                            "company_address": AUTONOMO_ADDRESS, "company_iban": AUTONOMO_IBAN,
+                            "company_logo": "", "codigo_html": "", "codigo_css": ""
+                        }
+                    except Exception:
+                        company_config = {
+                            "company_name": AUTONOMO_NAME, "company_tax_id": AUTONOMO_TAX_ID,
+                            "company_address": AUTONOMO_ADDRESS, "company_iban": AUTONOMO_IBAN,
+                            "company_logo": "", "codigo_html": "", "codigo_css": ""
+                        }
+                    if factura_row.get("tipo") == "rectificativa":
+                        company_config["es_rectificativa"] = True
+                        id_orig = factura_row.get("id_factura_original")
+                        if id_orig:
+                            try:
+                                orig_res = supabase.table("invoices_v2").select("invoice_number").eq("id", id_orig).single().execute()
+                                if orig_res.data:
+                                    company_config["factura_original_num"] = orig_res.data["invoice_number"]
+                                else:
+                                    company_config["factura_original_num"] = "desconocida"
+                            except Exception:
                                 company_config["factura_original_num"] = "desconocida"
-                        except Exception:
+                        else:
                             company_config["factura_original_num"] = "desconocida"
                     else:
-                        company_config["factura_original_num"] = "desconocida"
-                else:
-                    company_config["es_rectificativa"] = False
-                    company_config["factura_original_num"] = None
-                pdf_bytes = make_invoice_pdf_from_template(factura_row, cliente, company_config, lineas_fact_list)
-                if pdf_bytes:
-                    st.download_button("⬇️ Descargar PDF", pdf_bytes, f"Factura_{factura_row['invoice_number']}.pdf", mime="application/pdf")
-                
-                if st.button("📄 Descargar XML FacturaE", key=f"xml_{fact_id}"):
-                    from facturae_utils import generar_facturae_xml
-                    from firma_xades import cargar_certificado_desde_secrets
-                    
-                    certificado, password = cargar_certificado_desde_secrets()
-                    
-                    if certificado and password:
-                        xml_str = generar_facturae_xml(
-                            factura_row, cliente, company_config, lineas_fact_list,
-                            firmar=True, certificado=certificado, password=password
-                        )
-                        st.success("XML firmado con XAdES-EPES")
-                    else:
-                        xml_str = generar_facturae_xml(
-                            factura_row, cliente, company_config, lineas_fact_list,
-                            firmar=False
-                        )
-                        st.warning("XML sin firma (no hay certificado configurado)")
-                    
-                    st.download_button(
-                        "Descargar XML",
-                        xml_str.encode('utf-8'),
-                        f"Factura_{factura_row['invoice_number']}.xml",
-                        mime="application/xml",
-                        key=f"download_xml_{fact_id}"
-                    )
-            with col2:
-                destinatario = st.text_input("Email del cliente", value="cliente@example.com", key="email_fact")
-                if st.button("📧 Enviar factura por email"):
+                        company_config["es_rectificativa"] = False
+                        company_config["factura_original_num"] = None
+                    pdf_bytes = make_invoice_pdf_from_template(factura_row, cliente, company_config, lineas_fact_list)
                     if pdf_bytes:
-                        exito = enviar_factura_email(destinatario, f"Factura {factura_row['invoice_number']}", "Adjunto su factura.", pdf_bytes, f"Factura_{factura_row['invoice_number']}.pdf")
-                        if exito:
-                            auditar_factura(fact_id, "enviada", factura_row.get("hash", ""), user_id)
-                            st.success("Factura enviada")
+                        st.download_button("⬇️ Descargar PDF", pdf_bytes, f"Factura_{factura_row['invoice_number']}.pdf", mime="application/pdf")
+                    
+                    if st.button("📄 Descargar XML FacturaE", key=f"xml_{fact_id}"):
+                        from facturae_utils import generar_facturae_xml
+                        from firma_xades import cargar_certificado_desde_secrets
+                        
+                        certificado, password = cargar_certificado_desde_secrets()
+                        
+                        if certificado and password:
+                            xml_str = generar_facturae_xml(
+                                factura_row, cliente, company_config, lineas_fact_list,
+                                firmar=True, certificado=certificado, password=password
+                            )
+                            st.success("XML firmado con XAdES-EPES")
                         else:
-                            st.error("No se pudo enviar")
-                    else:
-                        st.error("Primero genera el PDF")
-            with col3:
-                if estado_actual not in ("anulada", "rectificada") and factura_row.get("tipo") != "rectificativa":
-                    if st.button("📝 Emitir rectificativa"):
-                        st.session_state.modo_rectificativa = True
-                        st.session_state.rectificativa_original = factura_row
-                        st.session_state.rectificativa_lineas = lineas_fact_list
-                        st.rerun()
-            with col4:
-                if estado_actual != "anulada":
-                    if not st.session_state.confirmar_anulacion or st.session_state.factura_a_anular != fact_id:
-                        if st.button("🚫 Anular factura"):
-                            st.session_state.confirmar_anulacion = True
-                            st.session_state.factura_a_anular = fact_id
+                            xml_str = generar_facturae_xml(
+                                factura_row, cliente, company_config, lineas_fact_list,
+                                firmar=False
+                            )
+                            st.warning("XML sin firma (no hay certificado configurado)")
+                        
+                        st.download_button(
+                            "Descargar XML",
+                            xml_str.encode('utf-8'),
+                            f"Factura_{factura_row['invoice_number']}.xml",
+                            mime="application/xml",
+                            key=f"download_xml_{fact_id}"
+                        )
+                with col2:
+                    destinatario = st.text_input("Email del cliente", value="cliente@example.com", key="email_fact")
+                    if st.button("📧 Enviar factura por email"):
+                        if pdf_bytes:
+                            exito = enviar_factura_email(destinatario, f"Factura {factura_row['invoice_number']}", "Adjunto su factura.", pdf_bytes, f"Factura_{factura_row['invoice_number']}.pdf")
+                            if exito:
+                                auditar_factura(fact_id, "enviada", factura_row.get("hash", ""), user_id)
+                                st.success("Factura enviada")
+                            else:
+                                st.error("No se pudo enviar")
+                        else:
+                            st.error("Primero genera el PDF")
+                with col3:
+                    if estado_actual not in ("anulada", "rectificada") and factura_row.get("tipo") != "rectificativa":
+                        if st.button("📝 Emitir rectificativa"):
+                            st.session_state.modo_rectificativa = True
+                            st.session_state.rectificativa_original = factura_row
+                            st.session_state.rectificativa_lineas = lineas_fact_list
                             st.rerun()
-                    else:
-                        st.warning("¿Estás seguro de que deseas anular esta factura?")
-                        confirmado = st.checkbox("Confirmo que deseo anular esta factura")
-                        col_confirm, col_cancel = st.columns(2)
-                        with col_confirm:
-                            if st.button("Sí, anular definitivamente", disabled=not confirmado):
-                                try:
-                                    supabase.table("invoices_v2").update({"status": "anulada"}).eq("id", fact_id).execute()
-                                    auditar_factura(fact_id, "anulada", factura_row.get("hash", ""), user_id)
-                                    st.success("Factura anulada correctamente")
+                with col4:
+                    if estado_actual != "anulada":
+                        if not st.session_state.confirmar_anulacion or st.session_state.factura_a_anular != fact_id:
+                            if st.button("🚫 Anular factura"):
+                                st.session_state.confirmar_anulacion = True
+                                st.session_state.factura_a_anular = fact_id
+                                st.rerun()
+                        else:
+                            st.warning("¿Estás seguro de que deseas anular esta factura?")
+                            confirmado = st.checkbox("Confirmo que deseo anular esta factura")
+                            col_confirm, col_cancel = st.columns(2)
+                            with col_confirm:
+                                if st.button("Sí, anular definitivamente", disabled=not confirmado):
+                                    try:
+                                        supabase.table("invoices_v2").update({"status": "anulada"}).eq("id", fact_id).execute()
+                                        auditar_factura(fact_id, "anulada", factura_row.get("hash", ""), user_id)
+                                        st.success("Factura anulada correctamente")
+                                        st.session_state.confirmar_anulacion = False
+                                        st.session_state.factura_a_anular = None
+                                        get_invoices.clear()
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Error al anular factura: {e}")
+                            with col_cancel:
+                                if st.button("Cancelar"):
                                     st.session_state.confirmar_anulacion = False
                                     st.session_state.factura_a_anular = None
-                                    get_invoices.clear()
                                     st.rerun()
-                                except Exception as e:
-                                    st.error(f"Error al anular factura: {e}")
-                        with col_cancel:
-                            if st.button("Cancelar"):
-                                st.session_state.confirmar_anulacion = False
-                                st.session_state.factura_a_anular = None
-                                st.rerun()
+            else:
+                st.info("Selecciona una factura válida de la tabla.")
+        else:
+            st.info("Haz clic en una fila para seleccionar una factura.")
     else:
         st.info("No hay facturas emitidas.")
 
@@ -1368,51 +1403,56 @@ elif menu == "🛒 Compras":
             key="gastos_table"
         )
 
-        if event.selection and event.selection.rows:
+        if (event.selection and event.selection.rows and len(event.selection.rows) > 0):
             selected_row = event.selection.rows[0]
-            gasto_seleccionado = exp_df.iloc[selected_row]
-            gasto_row = gasto_seleccionado.to_dict()
-            
-            st.markdown("---")
-            st.subheader(f"Acciones para gasto {gasto_row['expense_number']}")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("✏️ Rectificar gasto"):
-                    st.session_state.modo_edicion_gasto = True
-                    st.session_state.gasto_editando_id = gasto_row["id"]
-                    st.session_state.datos_edicion_gasto = {
-                        "expense_number": gasto_row["expense_number"],
-                        "date": gasto_row["date"],
-                        "month": gasto_row["month"],
-                        "provider_name": gasto_row.get("Proveedor", gasto_row.get("supplier_name", "")),
-                        "category": gasto_row.get("concept", gasto_row.get("category", "")),
-                        "expense_type": gasto_row.get("expense_type", "Otros"),
-                        "base_amount": gasto_row["base_amount"],
-                        "vat_percentage": gasto_row.get("vat_percentage", 21),
-                        "attachment_url": gasto_row.get("attachment_url", "")
-                    }
-                    st.rerun()
-            with col2:
-                confirmado = st.checkbox(
-                    "Confirmo que deseo eliminar este gasto",
-                    key=f"confirm_delete_gasto_{gasto_row['id']}"
-                )
-                if st.button(
-                    "🗑️ Eliminar gasto",
-                    key=f"delete_gasto_btn_{gasto_row['id']}",
-                    disabled=not confirmado
-                ):
-                    try:
-                        supabase.table("expenses_v2").delete().eq("id", gasto_row["id"]).execute()
-                        st.success("Gasto eliminado correctamente")
-                        get_expenses.clear()
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error al eliminar gasto: {e}")
+            if selected_row is not None and 0 <= selected_row < len(exp_df):
+                gasto_seleccionado = exp_df.iloc[selected_row]
+                gasto_row = gasto_seleccionado.to_dict()
                 
-                if not confirmado:
-                    st.caption("Debes marcar la casilla de confirmación para habilitar el botón.")
+                st.markdown("---")
+                st.subheader(f"Acciones para gasto {gasto_row['expense_number']}")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("✏️ Rectificar gasto"):
+                        st.session_state.modo_edicion_gasto = True
+                        st.session_state.gasto_editando_id = gasto_row["id"]
+                        st.session_state.datos_edicion_gasto = {
+                            "expense_number": gasto_row["expense_number"],
+                            "date": gasto_row["date"],
+                            "month": gasto_row["month"],
+                            "provider_name": gasto_row.get("Proveedor", gasto_row.get("supplier_name", "")),
+                            "category": gasto_row.get("concept", gasto_row.get("category", "")),
+                            "expense_type": gasto_row.get("expense_type", "Otros"),
+                            "base_amount": gasto_row["base_amount"],
+                            "vat_percentage": gasto_row.get("vat_percentage", 21),
+                            "attachment_url": gasto_row.get("attachment_url", "")
+                        }
+                        st.rerun()
+                with col2:
+                    confirmado = st.checkbox(
+                        "Confirmo que deseo eliminar este gasto",
+                        key=f"confirm_delete_gasto_{gasto_row['id']}"
+                    )
+                    if st.button(
+                        "🗑️ Eliminar gasto",
+                        key=f"delete_gasto_btn_{gasto_row['id']}",
+                        disabled=not confirmado
+                    ):
+                        try:
+                            supabase.table("expenses_v2").delete().eq("id", gasto_row["id"]).execute()
+                            st.success("Gasto eliminado correctamente")
+                            get_expenses.clear()
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error al eliminar gasto: {e}")
+                    
+                    if not confirmado:
+                        st.caption("Debes marcar la casilla de confirmación para habilitar el botón.")
+            else:
+                st.info("Selecciona un gasto válido de la tabla.")
+        else:
+            st.info("Haz clic en una fila para seleccionar un gasto.")
     else:
         st.info("No hay gastos registrados.")
 
@@ -1834,7 +1874,7 @@ elif menu == "📊 Dashboards":
                 st.pyplot(fig)
 
 # ------------------------------------------------------------
-# PRESUPUESTOS (con selección nativa y eliminación corregida)
+# PRESUPUESTOS (con selección nativa y validación de límites)
 # ------------------------------------------------------------
 elif menu == "📝 Presupuestos":
     st.title("📝 Presupuestos")
@@ -2285,7 +2325,7 @@ elif menu == "📝 Presupuestos":
                     st.session_state.edit_budget_data = None
                     st.rerun()
 
-    # ============ PESTAÑA HISTORIAL (con eliminación corregida) ============
+    # ============ PESTAÑA HISTORIAL (con validación de límites) ============
     with tab_historial:
         st.subheader("Presupuestos guardados")
         budgets_df = get_budgets(user_id)
@@ -2314,137 +2354,142 @@ elif menu == "📝 Presupuestos":
                 key="budgets_table"
             )
 
-            if event.selection and event.selection.rows:
+            if (event.selection and event.selection.rows and len(event.selection.rows) > 0):
                 selected_row = event.selection.rows[0]
-                budget_row = budgets_df.iloc[selected_row]
-                budget_id = budget_row["id"]
-                
-                try:
-                    resp = supabase.table("budgets").select("*").eq("id", budget_id).single().execute()
-                    if resp.data:
-                        budget_data = resp.data
-                    else:
-                        budget_data = budget_row.to_dict()
-                except Exception:
-                    budget_data = budget_row.to_dict()
-
-                st.markdown("---")
-                st.subheader(f"Acciones para presupuesto {budget_data['budget_number']}")
-                st.write(f"**Cliente:** {budget_data.get('client_name', '')}")
-                st.write(f"**Fecha:** {budget_data.get('date', '')}")
-                st.write(f"**Total:** {money(budget_data.get('total', 0))}")
-                
-                try:
-                    lineas_db = json.loads(budget_data.get("lines", "[]"))
-                    if lineas_db:
-                        st.table(pd.DataFrame(lineas_db)[["description", "quantity", "unit_price", "total"]])
-                except Exception:
-                    lineas_db = []
-
-                client_d = {
-                    "name": budget_data.get("client_name", ""),
-                    "tax_id": budget_data.get("client_tax_id", ""),
-                    "address": budget_data.get("client_address", "")
-                }
-
-                col1, col2, col3, col4 = st.columns(4)
-                
-                with col1:
-                    if st.button("📄 Descargar PDF", key=f"pdf_{budget_id}"):
-                        empresa["user_id"] = user_id
-                        if empresa and client_d and lineas_db:
-                            pdf_bytes = make_budget_pdf(
-                                empresa, client_d, lineas_db,
-                                budget_data.get("base_total", 0), 
-                                budget_data.get("vat_total", 0),
-                                budget_data.get("total", 0), 
-                                budget_data.get("vat_pct", 21),
-                                budget_number=budget_data.get("budget_number", "---")
-                            )
-                            if pdf_bytes:
-                                st.download_button(
-                                    "Descargar PDF",
-                                    pdf_bytes,
-                                    f"Presupuesto_{budget_data['budget_number']}.pdf",
-                                    mime="application/pdf",
-                                    key=f"dl_{budget_id}"
-                                )
+                if selected_row is not None and 0 <= selected_row < len(budgets_df):
+                    budget_row = budgets_df.iloc[selected_row]
+                    budget_id = budget_row["id"]
+                    
+                    try:
+                        resp = supabase.table("budgets").select("*").eq("id", budget_id).single().execute()
+                        if resp.data:
+                            budget_data = resp.data
                         else:
-                            st.error("Faltan datos para generar el presupuesto.")
-                
-                with col2:
-                    if st.button("📧 Enviar por email", key=f"email_btn_{budget_id}"):
-                        st.session_state[f"show_email_{budget_id}"] = True
+                            budget_data = budget_row.to_dict()
+                    except Exception:
+                        budget_data = budget_row.to_dict()
+
+                    st.markdown("---")
+                    st.subheader(f"Acciones para presupuesto {budget_data['budget_number']}")
+                    st.write(f"**Cliente:** {budget_data.get('client_name', '')}")
+                    st.write(f"**Fecha:** {budget_data.get('date', '')}")
+                    st.write(f"**Total:** {money(budget_data.get('total', 0))}")
                     
-                    if st.session_state.get(f"show_email_{budget_id}", False):
-                        destinatario = st.text_input(
-                            "Email del destinatario",
-                            key=f"email_dest_{budget_id}",
-                            placeholder="cliente@ejemplo.com"
-                        )
-                        if st.button("✅ Enviar ahora", key=f"send_{budget_id}"):
-                            if not destinatario or "@" not in destinatario:
-                                st.error("Introduce un email válido.")
-                            else:
-                                empresa["user_id"] = user_id
-                                if empresa and client_d and lineas_db:
-                                    pdf_bytes = make_budget_pdf(
-                                        empresa, client_d, lineas_db,
-                                        budget_data.get("base_total", 0),
-                                        budget_data.get("vat_total", 0),
-                                        budget_data.get("total", 0),
-                                        budget_data.get("vat_pct", 21),
-                                        budget_number=budget_data.get("budget_number", "---")
+                    try:
+                        lineas_db = json.loads(budget_data.get("lines", "[]"))
+                        if lineas_db:
+                            st.table(pd.DataFrame(lineas_db)[["description", "quantity", "unit_price", "total"]])
+                    except Exception:
+                        lineas_db = []
+
+                    client_d = {
+                        "name": budget_data.get("client_name", ""),
+                        "tax_id": budget_data.get("client_tax_id", ""),
+                        "address": budget_data.get("client_address", "")
+                    }
+
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    with col1:
+                        if st.button("📄 Descargar PDF", key=f"pdf_{budget_id}"):
+                            empresa["user_id"] = user_id
+                            if empresa and client_d and lineas_db:
+                                pdf_bytes = make_budget_pdf(
+                                    empresa, client_d, lineas_db,
+                                    budget_data.get("base_total", 0), 
+                                    budget_data.get("vat_total", 0),
+                                    budget_data.get("total", 0), 
+                                    budget_data.get("vat_pct", 21),
+                                    budget_number=budget_data.get("budget_number", "---")
+                                )
+                                if pdf_bytes:
+                                    st.download_button(
+                                        "Descargar PDF",
+                                        pdf_bytes,
+                                        f"Presupuesto_{budget_data['budget_number']}.pdf",
+                                        mime="application/pdf",
+                                        key=f"dl_{budget_id}"
                                     )
-                                    if pdf_bytes:
-                                        with st.spinner("Enviando email..."):
-                                            exito = enviar_factura_email(
-                                                destinatario,
-                                                f"Presupuesto {budget_data['budget_number']}",
-                                                "Adjunto le enviamos el presupuesto solicitado.",
-                                                pdf_bytes,
-                                                f"Presupuesto_{budget_data['budget_number']}.pdf"
-                                            )
-                                        if exito:
-                                            st.success("Presupuesto enviado correctamente")
-                                            st.session_state[f"show_email_{budget_id}"] = False
-                                            time.sleep(1)
-                                            st.rerun()
-                                        else:
-                                            st.error("No se pudo enviar el email")
-                                    else:
-                                        st.error("No se pudo generar el PDF del presupuesto.")
+                            else:
+                                st.error("Faltan datos para generar el presupuesto.")
+                    
+                    with col2:
+                        if st.button("📧 Enviar por email", key=f"email_btn_{budget_id}"):
+                            st.session_state[f"show_email_{budget_id}"] = True
+                        
+                        if st.session_state.get(f"show_email_{budget_id}", False):
+                            destinatario = st.text_input(
+                                "Email del destinatario",
+                                key=f"email_dest_{budget_id}",
+                                placeholder="cliente@ejemplo.com"
+                            )
+                            if st.button("✅ Enviar ahora", key=f"send_{budget_id}"):
+                                if not destinatario or "@" not in destinatario:
+                                    st.error("Introduce un email válido.")
                                 else:
-                                    st.error("Faltan datos para generar el presupuesto.")
-                
-                with col3:
-                    if st.button("✏️ Editar", key=f"edit_{budget_id}"):
-                        st.session_state.editing_budget_id = budget_id
-                        st.session_state.edit_budget_data = budget_data
-                        st.rerun()
-                
-                with col4:
-                    confirmado = st.checkbox(
-                        "Confirmar eliminación",
-                        key=f"confirm_del_{budget_id}"
-                    )
+                                    empresa["user_id"] = user_id
+                                    if empresa and client_d and lineas_db:
+                                        pdf_bytes = make_budget_pdf(
+                                            empresa, client_d, lineas_db,
+                                            budget_data.get("base_total", 0),
+                                            budget_data.get("vat_total", 0),
+                                            budget_data.get("total", 0),
+                                            budget_data.get("vat_pct", 21),
+                                            budget_number=budget_data.get("budget_number", "---")
+                                        )
+                                        if pdf_bytes:
+                                            with st.spinner("Enviando email..."):
+                                                exito = enviar_factura_email(
+                                                    destinatario,
+                                                    f"Presupuesto {budget_data['budget_number']}",
+                                                    "Adjunto le enviamos el presupuesto solicitado.",
+                                                    pdf_bytes,
+                                                    f"Presupuesto_{budget_data['budget_number']}.pdf"
+                                                )
+                                            if exito:
+                                                st.success("Presupuesto enviado correctamente")
+                                                st.session_state[f"show_email_{budget_id}"] = False
+                                                time.sleep(1)
+                                                st.rerun()
+                                            else:
+                                                st.error("No se pudo enviar el email")
+                                        else:
+                                            st.error("No se pudo generar el PDF del presupuesto.")
+                                    else:
+                                        st.error("Faltan datos para generar el presupuesto.")
                     
-                    if st.button(
-                        "🗑️ Eliminar",
-                        key=f"del_{budget_id}",
-                        disabled=not confirmado
-                    ):
-                        try:
-                            supabase.table("budgets").delete().eq("id", budget_id).execute()
-                            st.success("Presupuesto eliminado.")
-                            get_budgets.clear()
-                            time.sleep(0.5)
+                    with col3:
+                        if st.button("✏️ Editar", key=f"edit_{budget_id}"):
+                            st.session_state.editing_budget_id = budget_id
+                            st.session_state.edit_budget_data = budget_data
                             st.rerun()
-                        except Exception as e:
-                            st.error(f"Error al eliminar presupuesto: {e}")
                     
-                    if not confirmado:
-                        st.caption("Debes marcar la casilla para habilitar el botón.")
+                    with col4:
+                        confirmado = st.checkbox(
+                            "Confirmar eliminación",
+                            key=f"confirm_del_{budget_id}"
+                        )
+                        
+                        if st.button(
+                            "🗑️ Eliminar",
+                            key=f"del_{budget_id}",
+                            disabled=not confirmado
+                        ):
+                            try:
+                                supabase.table("budgets").delete().eq("id", budget_id).execute()
+                                st.success("Presupuesto eliminado.")
+                                get_budgets.clear()
+                                time.sleep(0.5)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error al eliminar presupuesto: {e}")
+                        
+                        if not confirmado:
+                            st.caption("Debes marcar la casilla para habilitar el botón.")
+                else:
+                    st.info("Selecciona un presupuesto válido de la tabla.")
+            else:
+                st.info("Haz clic en una fila para seleccionar un presupuesto.")
         else:
             st.info("No hay presupuestos guardados aún.")
 
