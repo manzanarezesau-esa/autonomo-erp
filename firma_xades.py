@@ -13,16 +13,19 @@ from signxml import XMLSigner, methods
 # CONFIGURACIÓN DE LA TSA (Autoridad de Sellado de Tiempo)
 # ============================================================
 
-# ✅ URL OFICIAL TSA FNMT (Servicios de Certificación)
-TSA_URL_FNMT = "http://servicios.cert.fnmt.es/tsa/postreq.aspx"
+# Lista de servidores TSA en orden de preferencia
+TSA_LIST = [
+    "http://servicios.cert.fnmt.es/tsa/postreq.aspx",  # FNMT (España)
+    "http://timestamp.digicert.com",                    # DigiCert (Internacional)
+    "https://freetsa.org/tsr"                           # FreeTSA (Gratuita)
+]
 
-# URLs alternativas para fallback
-TSA_URL_DIGICERT = "http://timestamp.digicert.com"
-TSA_URL_SECTIGO = "https://timestamp.sectigo.com"
-TSA_URL_FREETSA = "https://freetsa.org/tsr"
-
-# TSA por defecto (FNMT para España)
-TSA_URL = TSA_URL_FNMT
+# Headers HTTP completos para evitar bloqueos
+TSA_HEADERS = {
+    "Content-Type": "application/timestamp-query",
+    "Accept": "application/timestamp-reply",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AutonomoERP/1.0"
+}
 
 
 def crear_timestamp_request(data_to_timestamp):
@@ -65,19 +68,51 @@ def crear_timestamp_request(data_to_timestamp):
     return request
 
 
-def obtener_timestamp(data_to_timestamp, tsa_url=None):
+def solicitar_timestamp(tsq_bytes):
     """
-    Obtiene un sello de tiempo RFC 3161 de una TSA.
+    Solicita un sello de tiempo a múltiples TSA con reintentos automáticos.
+    
+    Parámetros:
+    - tsq_bytes: Petición timestamp en formato DER (bytes)
+    
+    Retorna:
+    - Timestamp token (bytes) o lanza excepción si todas fallan
+    """
+    for url in TSA_LIST:
+        try:
+            response = requests.post(
+                url,
+                data=tsq_bytes,
+                headers=TSA_HEADERS,
+                timeout=10
+            )
+            
+            if response.status_code == 200 and len(response.content) > 0:
+                return response.content
+            else:
+                st.warning(f"TSA {url} devolvió HTTP {response.status_code}. Intentando con la siguiente...")
+                
+        except requests.exceptions.Timeout:
+            st.warning(f"Timeout en TSA {url}. Intentando con la siguiente...")
+        except requests.exceptions.ConnectionError:
+            st.warning(f"Error de conexión con TSA {url}. Intentando con la siguiente...")
+        except Exception as e:
+            st.warning(f"Error en TSA {url}: {str(e)}. Intentando con la siguiente...")
+    
+    # Si llegamos aquí, todas las TSA fallaron
+    raise Exception("Imposible obtener el sello de tiempo de las TSAs disponibles.")
+
+
+def obtener_timestamp(data_to_timestamp):
+    """
+    Obtiene un sello de tiempo RFC 3161 con reintentos entre múltiples TSA.
     
     Parámetros:
     - data_to_timestamp: Datos a sellar (bytes)
-    - tsa_url: URL de la TSA (opcional, usa FNMT por defecto)
     
     Retorna:
     - Timestamp token (bytes) o None si falla
     """
-    url = tsa_url or TSA_URL
-    
     try:
         # Crear petición timestamp
         ts_request = crear_timestamp_request(data_to_timestamp)
@@ -85,47 +120,10 @@ def obtener_timestamp(data_to_timestamp, tsa_url=None):
         if ts_request is None:
             return None
         
-        # Enviar petición a la TSA con Content-Type correcto
-        headers = {
-            "Content-Type": "application/timestamp-query",
-            "Accept": "application/timestamp-reply",
-            "User-Agent": "Hondureformas-ERP/1.0"
-        }
+        # Solicitar timestamp con reintentos automáticos
+        timestamp_token = solicitar_timestamp(ts_request)
+        return timestamp_token
         
-        # ✅ Usar POST con Content-Type: application/timestamp-query
-        response = requests.post(
-            url,
-            data=ts_request,
-            headers=headers,
-            timeout=30
-        )
-        
-        if response.status_code == 200:
-            return response.content
-        elif response.status_code == 404:
-            st.warning("La TSA de la FNMT devolvió 404. Intentando con TSA alternativa...")
-            # Intentar con TSA alternativa
-            response_fallback = requests.post(
-                TSA_URL_DIGICERT,
-                data=ts_request,
-                headers=headers,
-                timeout=30
-            )
-            if response_fallback.status_code == 200:
-                return response_fallback.content
-            else:
-                st.warning(f"La TSA alternativa también falló (HTTP {response_fallback.status_code})")
-                return None
-        else:
-            st.warning(f"La TSA devolvió HTTP {response.status_code}")
-            return None
-            
-    except requests.exceptions.Timeout:
-        st.warning("Timeout al conectar con la TSA. La firma se realizará sin timestamp.")
-        return None
-    except requests.exceptions.ConnectionError:
-        st.warning("No se pudo conectar con la TSA. La firma se realizará sin timestamp.")
-        return None
     except Exception as e:
         st.warning(f"Error al obtener timestamp: {str(e)}. La firma se realizará sin timestamp.")
         return None
@@ -239,7 +237,7 @@ def firmar_facturae_xml(xml_input, certificado_p12, password_certificado, usar_t
                 # ✅ CORRECTO: Sin encoding en C14N (devuelve bytes)
                 signed_data = etree.tostring(signed_xml, method='c14n')
                 
-                # Obtener timestamp de la TSA
+                # Obtener timestamp con reintentos automáticos
                 timestamp_token = obtener_timestamp(signed_data)
                 
                 if timestamp_token:
@@ -300,7 +298,7 @@ def firmar_facturae_xml(xml_input, certificado_p12, password_certificado, usar_t
                         )
                         encapsulated_ts.text = timestamp_b64
                         
-                        st.success("✅ Firma XAdES-T con timestamp de la FNMT aplicada correctamente")
+                        st.success("✅ Firma XAdES-T con timestamp aplicada correctamente")
                     else:
                         st.warning("No se encontró el nodo de firma para añadir timestamp.")
                 else:
