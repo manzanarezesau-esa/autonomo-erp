@@ -818,7 +818,7 @@ elif menu == "📦 Productos":
         st.info("No hay productos en el catálogo.")
 
 # ------------------------------------------------------------
-# VENTAS (con selección nativa, XML firmado, validación XSD y Veri*Factu)
+# VENTAS (con XAdES-T, validación XSD y Veri*Factu)
 # ------------------------------------------------------------
 elif menu == "💰 Ventas":
     st.title("Facturas de Venta")
@@ -1184,9 +1184,10 @@ elif menu == "💰 Ventas":
                             xml_str = generar_facturae_xml(
                                 factura_row, cliente, company_config, lineas_fact_list,
                                 firmar=True, certificado=certificado, password=password,
-                                validar=True
+                                validar=True,
+                                usar_timestamp=True
                             )
-                            st.success("XML firmado con XAdES-EPES")
+                            st.success("XML firmado con XAdES-T (timestamp FNMT)")
                         else:
                             xml_str = generar_facturae_xml(
                                 factura_row, cliente, company_config, lineas_fact_list,
@@ -2327,7 +2328,7 @@ elif menu == "📝 Presupuestos":
                     st.session_state.edit_budget_data = None
                     st.rerun()
 
-    # ============ PESTAÑA HISTORIAL (con validación de límites) ============
+    # ============ PESTAÑA HISTORIAL ============
     with tab_historial:
         st.subheader("Presupuestos guardados")
         budgets_df = get_budgets(user_id)
