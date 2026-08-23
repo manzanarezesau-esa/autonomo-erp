@@ -2,7 +2,8 @@
 import streamlit as st
 from lxml import etree
 import base64
-from cryptography.hazmat.primitives.serialization import pkcs12, serialization
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.serialization import pkcs12
 
 def firmar_facturae_xml(xml_str, certificado_p12, password_certificado):
     """
