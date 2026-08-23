@@ -14,10 +14,11 @@ from signxml import XMLSigner, methods
 # ============================================================
 
 # Lista de servidores TSA en orden de preferencia
+# FreeTSA primero para evitar bloqueos en Streamlit Cloud
 TSA_LIST = [
-    "http://servicios.cert.fnmt.es/tsa/postreq.aspx",  # FNMT (España)
-    "http://timestamp.digicert.com",                    # DigiCert (Internacional)
-    "https://freetsa.org/tsr"                           # FreeTSA (Gratuita)
+    "https://freetsa.org/tsr",                           # FreeTSA (Gratuita - primera opción)
+    "http://timestamp.digicert.com",                     # DigiCert (Internacional)
+    "http://servicios.cert.fnmt.es/tsa/postreq.aspx"    # FNMT (España - última opción)
 ]
 
 # Headers HTTP completos para evitar bloqueos
@@ -88,6 +89,7 @@ def solicitar_timestamp(tsq_bytes):
             )
             
             if response.status_code == 200 and len(response.content) > 0:
+                st.info(f"✅ Sello de tiempo obtenido de: {url.split('/')[2]}")
                 return response.content
             else:
                 st.warning(f"TSA {url} devolvió HTTP {response.status_code}. Intentando con la siguiente...")
