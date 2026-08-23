@@ -12,9 +12,14 @@ from signxml import XMLSigner, methods
 # ============================================================
 # CONFIGURACIÓN DE LA TSA (Autoridad de Sellado de Tiempo)
 # ============================================================
-TSA_URL_FNMT = "https://www.sede.fnmt.gob.es/tsa/tsa.php"
-TSA_URL_DIGICERT = "https://timestamp.digicert.com"
+
+# ✅ URL OFICIAL TSA FNMT (Servicios de Certificación)
+TSA_URL_FNMT = "http://servicios.cert.fnmt.es/tsa/postreq.aspx"
+
+# URLs alternativas para fallback
+TSA_URL_DIGICERT = "http://timestamp.digicert.com"
 TSA_URL_SECTIGO = "https://timestamp.sectigo.com"
+TSA_URL_FREETSA = "https://freetsa.org/tsr"
 
 # TSA por defecto (FNMT para España)
 TSA_URL = TSA_URL_FNMT
@@ -80,12 +85,14 @@ def obtener_timestamp(data_to_timestamp, tsa_url=None):
         if ts_request is None:
             return None
         
-        # Enviar petición a la TSA
+        # Enviar petición a la TSA con Content-Type correcto
         headers = {
             "Content-Type": "application/timestamp-query",
             "Accept": "application/timestamp-reply",
+            "User-Agent": "Hondureformas-ERP/1.0"
         }
         
+        # ✅ Usar POST con Content-Type: application/timestamp-query
         response = requests.post(
             url,
             data=ts_request,
@@ -95,6 +102,20 @@ def obtener_timestamp(data_to_timestamp, tsa_url=None):
         
         if response.status_code == 200:
             return response.content
+        elif response.status_code == 404:
+            st.warning("La TSA de la FNMT devolvió 404. Intentando con TSA alternativa...")
+            # Intentar con TSA alternativa
+            response_fallback = requests.post(
+                TSA_URL_DIGICERT,
+                data=ts_request,
+                headers=headers,
+                timeout=30
+            )
+            if response_fallback.status_code == 200:
+                return response_fallback.content
+            else:
+                st.warning(f"La TSA alternativa también falló (HTTP {response_fallback.status_code})")
+                return None
         else:
             st.warning(f"La TSA devolvió HTTP {response.status_code}")
             return None
