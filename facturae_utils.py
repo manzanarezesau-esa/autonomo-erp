@@ -4,9 +4,10 @@ from xml.dom import minidom
 import streamlit as st
 from firma_xades import firmar_facturae_xml
 from facturae_validator import validar_facturae_completo
+from certificate_manager import obtener_certificado_usuario
 
 
-def generar_facturae_xml(invoice, client, company, lineas, firmar=False, certificado=None, password=None, validar=True, usar_timestamp=False):
+def generar_facturae_xml(invoice, client, company, lineas, user_id=None, firmar=False, certificado=None, password=None, validar=True, usar_timestamp=True):
     """
     Genera un XML compatible con FacturaE v3.2.2.
     Opcionalmente valida y firma con XAdES-EPES o XAdES-T.
@@ -16,11 +17,12 @@ def generar_facturae_xml(invoice, client, company, lineas, firmar=False, certifi
     - client: Diccionario con datos del cliente
     - company: Diccionario con datos de la empresa emisora
     - lineas: Lista de líneas de factura
+    - user_id: ID del usuario (para obtener su certificado automáticamente)
     - firmar: Boolean para firmar o no
-    - certificado: Bytes del certificado P12
-    - password: Contraseña del certificado
+    - certificado: Bytes del certificado P12 (opcional si user_id proporcionado)
+    - password: Contraseña del certificado (opcional si user_id proporcionado)
     - validar: Boolean para validar contra XSD antes de firmar
-    - usar_timestamp: Boolean para añadir timestamp XAdES-T (True) o XAdES-EPES (False)
+    - usar_timestamp: Boolean para añadir timestamp XAdES-T
     
     Retorna:
     - XML generado (firmado si se solicita) como string
@@ -104,12 +106,19 @@ def generar_facturae_xml(invoice, client, company, lineas, firmar=False, certifi
             st.success("✅ XML validado correctamente contra el esquema oficial FacturaE v3.2.2")
     
     # Firmar si se solicita
-    if firmar and certificado and password:
-        pretty_xml = firmar_facturae_xml(
-            pretty_xml,
-            certificado,
-            password,
-            usar_timestamp=usar_timestamp  # ← Pasar el parámetro correctamente
-        )
+    if firmar:
+        # Si no se proporcionó certificado directamente, obtener del usuario
+        if certificado is None and password is None and user_id:
+            certificado, password = obtener_certificado_usuario(user_id)
+        
+        if certificado and password:
+            pretty_xml = firmar_facturae_xml(
+                pretty_xml,
+                certificado,
+                password,
+                usar_timestamp=usar_timestamp
+            )
+        else:
+            st.warning("No se encontró certificado para firmar. El XML se generará sin firma.")
     
     return pretty_xml
