@@ -1187,7 +1187,7 @@ elif menu == "💰 Ventas":
                                 validar=True,
                                 usar_timestamp=True
                             )
-                            st.success("XML firmado con XAdES-T (timestamp FNMT)")
+                            st.success("XML firmado con XAdES-T (timestamp aplicado)")
                         else:
                             xml_str = generar_facturae_xml(
                                 factura_row, cliente, company_config, lineas_fact_list,
