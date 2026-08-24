@@ -1662,9 +1662,8 @@ elif menu == "📒 Contabilidad":
         col_b2.metric("Pasivo (Cuentas a pagar)", money(pasivo_total))
         col_b3.metric("Patrimonio Neto", money(patrimonio_neto))
         st.caption("Balance simplificado: Activo = facturas emitidas, Pasivo = gastos registrados.")
-
 # ════════════════════════════════════════════════════════════
-# IMPUESTOS TRIMESTRALES
+# IMPUESTOS TRIMESTRALES (con Modelo 303 mejorado)
 # ════════════════════════════════════════════════════════════
 elif menu == "🏛️ Impuestos Trimestrales":
     st.title("Liquidación Trimestral de IVA e IRPF")
@@ -1702,6 +1701,8 @@ elif menu == "🏛️ Impuestos Trimestrales":
     beneficio_neto = base_ventas - base_compras
     pago_fraccionado = beneficio_neto * 0.20
     if pago_fraccionado < 0: pago_fraccionado = 0.0
+    iva_ingresar = max(iva_repercutido - iva_soportado, 0)
+    
     st.subheader(f"Resumen {trimestre} {anio}")
     col1,col2,col3 = st.columns(3)
     col1.metric("Ventas (base)", money(base_ventas))
@@ -1710,17 +1711,152 @@ elif menu == "🏛️ Impuestos Trimestrales":
     col4,col5,col6 = st.columns(3)
     col4.metric("Compras (base)", money(base_compras))
     col5.metric("IVA soportado", money(iva_soportado))
-    col6.metric("IVA a ingresar", money(max(iva_repercutido - iva_soportado, 0)))
+    col6.metric("IVA a ingresar", money(iva_ingresar))
     st.markdown("---")
     st.subheader("Pago fraccionado IRPF (estimación)")
     col7,col8,col9 = st.columns(3)
     col7.metric("Beneficio neto", money(beneficio_neto))
     col8.metric("% aplicado", "20 %")
     col9.metric("💶 Pago fraccionado", money(pago_fraccionado))
-    if st.button("📄 Generar archivo Modelo 303"):
-        iva_ingresar = max(iva_repercutido - iva_soportado, 0)
-        contenido = f"303\r\n{anio}\r\n{trimestre}\r\n{int(base_ventas*100):011d}\r\n{int(iva_repercutido*100):011d}\r\n{int(base_compras*100):011d}\r\n{int(iva_soportado*100):011d}\r\n{int(iva_ingresar*100):011d}\r\n{int(abs(irpf_retenido)*100):011d}\r\n"
-        st.download_button("Descargar 303.txt", contenido.encode("utf-8"), f"303_{anio}_{trimestre.replace(' ','')}.txt", "text/plain")
+    
+    # ============ DESCARGA DEL MODELO 303 MEJORADA ============
+    st.markdown("---")
+    st.subheader("📄 Modelo 303")
+    
+    if st.button("Generar Modelo 303"):
+        # Obtener NIF del usuario
+        try:
+            config_res = supabase.table("settings").select("company_tax_id, company_name").eq("user_id", user_id).execute()
+            if config_res.data:
+                nif_emisor = config_res.data[0].get("company_tax_id", "")
+                nombre_emisor = config_res.data[0].get("company_name", "")
+            else:
+                nif_emisor = AUTONOMO_TAX_ID
+                nombre_emisor = AUTONOMO_NAME
+        except Exception:
+            nif_emisor = AUTONOMO_TAX_ID
+            nombre_emisor = AUTONOMO_NAME
+        
+        st.markdown("### Opciones de descarga")
+        col_desc1, col_desc2 = st.columns(2)
+        
+        with col_desc1:
+            st.markdown("**📄 Borrador PDF (Para tu consulta)**")
+            st.caption("Resumen visual con desglose de IVA")
+            
+            # Generar PDF simple con WeasyPrint
+            from weasyprint import HTML
+            
+            meses_str = {
+                "1T (Ene-Mar)": "Enero - Febrero - Marzo",
+                "2T (Abr-Jun)": "Abril - Mayo - Junio",
+                "3T (Jul-Sep)": "Julio - Agosto - Septiembre",
+                "4T (Oct-Dic)": "Octubre - Noviembre - Diciembre"
+            }.get(trimestre, trimestre)
+            
+            resultado = iva_repercutido - iva_soportado
+            if resultado > 0:
+                resultado_texto = f"A INGRESAR: {resultado:,.2f} €"
+                casilla = "Casilla 69"
+            elif resultado < 0:
+                resultado_texto = f"A COMPENSAR: {abs(resultado):,.2f} €"
+                casilla = "Casilla 71"
+            else:
+                resultado_texto = "SIN RESULTADO (0,00 €)"
+                casilla = "Casilla 69/71"
+            
+            html_pdf = f"""
+            <!DOCTYPE html>
+            <html>
+            <head><meta charset="utf-8"><style>
+            body {{ font-family: Arial; margin: 1.5cm; font-size: 11px; }}
+            .header {{ border-bottom: 3px solid #1e3a8a; padding-bottom: 15px; margin-bottom: 25px; }}
+            .header h1 {{ color: #1e3a8a; font-size: 22px; }}
+            h2 {{ color: #1e3a8a; font-size: 16px; margin: 20px 0 10px 0; }}
+            table {{ width: 100%; border-collapse: collapse; margin: 10px 0; }}
+            th {{ background-color: #1e3a8a; color: white; padding: 8px; text-align: left; }}
+            td {{ padding: 8px; border-bottom: 1px solid #e2e8f0; }}
+            .amount {{ text-align: right; }}
+            .resultado {{ background-color: #ebf4ff; border: 2px solid #1e3a8a; border-radius: 8px; padding: 15px; margin: 20px 0; text-align: center; }}
+            .resultado .importe {{ font-size: 24px; font-weight: bold; color: #1e3a8a; }}
+            .aviso {{ background-color: #fff3cd; border: 1px solid #ffc107; padding: 10px; margin: 15px 0; font-size: 10px; }}
+            .footer {{ margin-top: 40px; font-size: 9px; color: #718096; text-align: center; }}
+            </style></head>
+            <body>
+            <div class="header">
+                <h1>MODELO 303 - IVA</h1>
+                <p><strong>Período:</strong> {trimestre} {anio}<br><strong>Meses:</strong> {meses_str}</p>
+            </div>
+            <div class="aviso">⚠️ <strong>BORRADOR INFORMATIVO</strong> - No tiene validez oficial ante la AEAT</div>
+            <h2>1. IVA DEVENGADO (Ventas)</h2>
+            <table>
+                <tr><th>Concepto</th><th>Base Imponible</th><th>Cuota Repercutida</th></tr>
+                <tr><td>Régimen general</td><td class="amount">{base_ventas:,.2f} €</td><td class="amount">{iva_repercutido:,.2f} €</td></tr>
+            </table>
+            <h2>2. IVA DEDUCIBLE (Compras)</h2>
+            <table>
+                <tr><th>Concepto</th><th>Base Imponible</th><th>Cuota Soportada</th></tr>
+                <tr><td>Adquisiciones corrientes</td><td class="amount">{base_compras:,.2f} €</td><td class="amount">{iva_soportado:,.2f} €</td></tr>
+            </table>
+            <h2>3. RESULTADO</h2>
+            <div class="resultado">
+                <div>{casilla}</div>
+                <div class="importe">{resultado_texto}</div>
+            </div>
+            <h2>4. INFORMACIÓN ADICIONAL</h2>
+            <table>
+                <tr><th>Concepto</th><th>Importe</th></tr>
+                <tr><td>IRPF Retenciones</td><td class="amount">{irpf_retenido:,.2f} €</td></tr>
+                <tr><td>Beneficio neto</td><td class="amount">{beneficio_neto:,.2f} €</td></tr>
+                <tr><td>Pago fraccionado (20%)</td><td class="amount">{pago_fraccionado:,.2f} €</td></tr>
+            </table>
+            <div class="footer">Documento generado el {datetime.now().strftime('%d/%m/%Y a las %H:%M')}</div>
+            </body></html>
+            """
+            
+            try:
+                pdf_bytes_303 = HTML(string=html_pdf).write_pdf()
+                st.download_button(
+                    "⬇️ Descargar PDF resumen",
+                    pdf_bytes_303,
+                    f"Modelo_303_{anio}_{trimestre.replace(' ','')}.pdf",
+                    mime="application/pdf",
+                    key="descargar_pdf_303"
+                )
+            except Exception as e:
+                st.error(f"Error al generar PDF: {e}")
+        
+        with col_desc2:
+            st.markdown("**💻 Fichero AEAT (Importación)**")
+            st.caption("Formato oficial para sede electrónica")
+            
+            # Formatear importes para AEAT (15 posiciones, céntimos)
+            def fmt_importe(valor):
+                centimos = int(round(valor * 100))
+                return f"{centimos:015d}"
+            
+            # Construir registro tipo 1
+            nif_limpio = nif_emisor.strip().upper().replace(" ", "")[:9].ljust(9)
+            nombre_limpio = nombre_emisor.strip()[:29].ljust(29)
+            periodo_cod = {"1T (Ene-Mar)": "01", "2T (Abr-Jun)": "02", "3T (Jul-Sep)": "03", "4T (Oct-Dic)": "04"}.get(trimestre, "01")
+            
+            registro = (
+                "01" + nif_limpio + nombre_limpio + str(anio) + " " + periodo_cod + "   " +
+                fmt_importe(base_ventas) + fmt_importe(iva_repercutido) +
+                fmt_importe(base_compras) + fmt_importe(iva_soportado) +
+                fmt_importe(iva_ingresar)
+            )
+            registro_fin = "99" + " " * 98
+            fichero_completo = registro + "\r\n" + registro_fin
+            
+            st.download_button(
+                "⬇️ Descargar fichero AEAT",
+                fichero_completo.encode('utf-8'),
+                f"303_{anio}_{trimestre.replace(' ','')}.txt",
+                mime="text/plain",
+                key="descargar_fichero_303"
+            )
+            st.warning("⚠️ Verifica el formato con el diseño oficial de la AEAT antes de importar.")
 
 # ════════════════════════════════════════════════════════════
 # CONCILIACIÓN BANCARIA
