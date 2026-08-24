@@ -12,3 +12,4 @@ signxml
 cryptography
 lxml
 pycryptodome
+stripe
