@@ -31,6 +31,11 @@ from certificate_manager import (
     guardar_certificado_usuario, obtener_certificado_usuario,
     eliminar_certificado_usuario, tiene_certificado
 )
+from stripe_utils import (
+    obtener_suscripcion_usuario, crear_checkout_session,
+    cancelar_suscripcion, verificar_acceso, procesar_success_url,
+    obtener_historial_pagos
+)
 
 st.set_page_config(page_title="Hondureformas ERP", page_icon="🏗️", layout="wide")
 
@@ -57,6 +62,10 @@ try:
                 st.session_state.user_id = user_meta.user.id
 except Exception:
     pass
+
+# Procesar URL de éxito de Stripe si existe
+if st.session_state.user is not None and "session_id" in st.query_params:
+    procesar_success_url()
 
 # ------------------------------------------------------------
 # PANTALLA DE LOGIN / REGISTRO / RECUPERACIÓN
@@ -160,6 +169,13 @@ with st.sidebar:
 
     st.markdown("---")
     st.write(f"👤 {st.session_state.user.email}")
+    
+    # Mostrar plan actual
+    suscripcion = obtener_suscripcion_usuario(user_id)
+    plan_actual = suscripcion.get("plan", "free") if suscripcion else "free"
+    iconos_plan = {"free": "🆓 Gratis", "basico": "💼 Básico", "profesional": "⭐ Profesional", "gestoria": "🏢 Gestoría"}
+    st.write(f"Plan: **{iconos_plan.get(plan_actual, plan_actual)}**")
+    
     if st.button("🔒 Cerrar sesión"):
         logout(supabase)
         st.rerun()
@@ -179,6 +195,7 @@ menu = st.sidebar.radio("Navegación", [
     "📊 Dashboards",
     "📝 Presupuestos",
     "👥 Colaboradores",
+    "💳 Suscripción",
     "⚙️ Configuración"
 ])
 
@@ -1457,14 +1474,6 @@ elif menu == "🛒 Compras":
         st.info("No hay gastos registrados.")
 
 # ════════════════════════════════════════════════════════════
-# RESTO DE SECCIONES (Facturación recurrente, Libro, Contabilidad,
-# Impuestos, Conciliación, Dashboards, Presupuestos, Colaboradores,
-# Configuración) - SE MANTIENEN COMO EN TU VERSIÓN ANTERIOR
-# ════════════════════════════════════════════════════════════
-
-# ... (El resto del código de Presupuestos, Configuración, etc.
-#      se mantiene EXACTAMENTE igual que en tu versión actual)
-# ════════════════════════════════════════════════════════════
 # FACTURACIÓN RECURRENTE
 # ════════════════════════════════════════════════════════════
 elif menu == "🔄 Facturación recurrente":
@@ -1550,6 +1559,91 @@ elif menu == "🔄 Facturación recurrente":
             st.error(f"Error al generar facturas recurrentes: {e}")
 
 # ════════════════════════════════════════════════════════════
+# SUSCRIPCIÓN
+# ════════════════════════════════════════════════════════════
+elif menu == "💳 Suscripción":
+    st.title("💳 Planes de Suscripción")
+    
+    suscripcion = obtener_suscripcion_usuario(user_id)
+    plan_actual = suscripcion.get("plan", "free") if suscripcion else "free"
+    
+    iconos_plan = {"free": "🆓 Gratis", "basico": "💼 Básico", "profesional": "⭐ Profesional", "gestoria": "🏢 Gestoría"}
+    
+    st.markdown(f"### Tu plan actual: **{iconos_plan.get(plan_actual, plan_actual)}**")
+    
+    # Mostrar historial de pagos si existe
+    pagos = obtener_historial_pagos(user_id)
+    if pagos:
+        st.markdown("---")
+        st.subheader("📜 Historial de pagos")
+        pagos_df = pd.DataFrame(pagos)
+        if not pagos_df.empty:
+            pagos_df["Fecha"] = pd.to_datetime(pagos_df["created_at"]).dt.strftime("%d/%m/%Y")
+            pagos_df["Importe"] = pagos_df["amount"].apply(lambda x: f"{float(x):,.2f} €")
+            pagos_df["Plan"] = pagos_df["plan"]
+            pagos_df["Estado"] = pagos_df["status"]
+            st.dataframe(pagos_df[["Fecha", "Importe", "Plan", "Estado"]], hide_index=True, use_container_width=True)
+    
+    st.markdown("---")
+    st.markdown("### Planes disponibles")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown("### 🆓 Gratis")
+        st.markdown("**0€/mes**")
+        st.markdown("- 3 facturas/mes")
+        st.markdown("- PDF básico")
+        st.markdown("- Sin firma electrónica")
+        st.markdown("- Sin Veri*Factu")
+        if plan_actual != "free":
+            if st.button("⬇️ Cambiar a Gratis", key="btn_free"):
+                if cancelar_suscripcion(user_id):
+                    st.success("Suscripción cancelada. Plan cambiado a Gratis.")
+                    time.sleep(1)
+                    st.rerun()
+        else:
+            st.success("✅ Plan actual")
+    
+    with col2:
+        st.markdown("### 💼 Básico")
+        st.markdown("**15€/mes**")
+        st.markdown("- Facturas ilimitadas")
+        st.markdown("- PDF con QR")
+        st.markdown("- Envío por email")
+        st.markdown("- Clientes y productos")
+        st.markdown("- Presupuestos")
+        if plan_actual != "basico":
+            if st.button("🚀 Contratar Básico", key="btn_basico"):
+                url = crear_checkout_session(user_id, st.session_state.user.email, "basico")
+                if url:
+                    st.markdown(f"[🔗 Ir a la página de pago]({url})")
+                    st.info("Serás redirigido a Stripe para completar el pago.")
+        else:
+            st.success("✅ Plan actual")
+    
+    with col3:
+        st.markdown("### ⭐ Profesional")
+        st.markdown("**25€/mes**")
+        st.markdown("- Todo lo del plan Básico")
+        st.markdown("- **Veri*Factu completo**")
+        st.markdown("- **FacturaE XML firmado XAdES-T**")
+        st.markdown("- Hash encadenado SHA-256")
+        st.markdown("- QR verificable AEAT")
+        st.markdown("- Contabilidad")
+        st.markdown("- Modelo 303")
+        if plan_actual != "profesional":
+            if st.button("🌟 Contratar Profesional", key="btn_profesional"):
+                url = crear_checkout_session(user_id, st.session_state.user.email, "profesional")
+                if url:
+                    st.markdown(f"[🔗 Ir a la página de pago]({url})")
+                    st.info("Serás redirigido a Stripe para completar el pago.")
+        else:
+            st.success("✅ Plan actual")
+    
+    st.markdown("---")
+    st.caption("Los pagos se procesan de forma segura a través de Stripe. Puedes cancelar en cualquier momento.")
+    # ════════════════════════════════════════════════════════════
 # LIBRO CONTABLE GENERAL
 # ════════════════════════════════════════════════════════════
 elif menu == "📖 Libro Contable General":
@@ -1662,6 +1756,7 @@ elif menu == "📒 Contabilidad":
         col_b2.metric("Pasivo (Cuentas a pagar)", money(pasivo_total))
         col_b3.metric("Patrimonio Neto", money(patrimonio_neto))
         st.caption("Balance simplificado: Activo = facturas emitidas, Pasivo = gastos registrados.")
+
 # ════════════════════════════════════════════════════════════
 # IMPUESTOS TRIMESTRALES (con Modelo 303 mejorado)
 # ════════════════════════════════════════════════════════════
@@ -1744,7 +1839,6 @@ elif menu == "🏛️ Impuestos Trimestrales":
             st.markdown("**📄 Borrador PDF (Para tu consulta)**")
             st.caption("Resumen visual con desglose de IVA")
             
-            # Generar PDF simple con WeasyPrint
             from weasyprint import HTML
             
             meses_str = {
@@ -1830,12 +1924,10 @@ elif menu == "🏛️ Impuestos Trimestrales":
             st.markdown("**💻 Fichero AEAT (Importación)**")
             st.caption("Formato oficial para sede electrónica")
             
-            # Formatear importes para AEAT (15 posiciones, céntimos)
             def fmt_importe(valor):
                 centimos = int(round(valor * 100))
                 return f"{centimos:015d}"
             
-            # Construir registro tipo 1
             nif_limpio = nif_emisor.strip().upper().replace(" ", "")[:9].ljust(9)
             nombre_limpio = nombre_emisor.strip()[:29].ljust(29)
             periodo_cod = {"1T (Ene-Mar)": "01", "2T (Abr-Jun)": "02", "3T (Jul-Sep)": "03", "4T (Oct-Dic)": "04"}.get(trimestre, "01")
