@@ -142,7 +142,7 @@ if st.session_state.user is None:
     st.stop()
 
 # ------------------------------------------------------------
-# BARRA LATERAL
+# BARRA LATERAL (con user_id seguro)
 # ------------------------------------------------------------
 logo_url = None
 try:
@@ -170,10 +170,24 @@ with st.sidebar:
     st.markdown("---")
     st.write(f"👤 {st.session_state.user.email}")
     
-    # Mostrar plan actual
-    suscripcion = obtener_suscripcion_usuario(user_id)
-    plan_actual = suscripcion.get("plan", "free") if suscripcion else "free"
-    iconos_plan = {"free": "🆓 Gratis", "basico": "💼 Básico", "profesional": "⭐ Profesional", "gestoria": "🏢 Gestoría"}
+    # Mostrar plan actual de forma segura
+    user_id_actual = st.session_state.get("user_id")
+    
+    if user_id_actual:
+        try:
+            suscripcion = obtener_suscripcion_usuario(user_id_actual)
+            plan_actual = suscripcion.get("plan", "free") if suscripcion else "free"
+        except Exception:
+            plan_actual = "free"
+    else:
+        plan_actual = "free"
+    
+    iconos_plan = {
+        "free": "🆓 Gratis",
+        "basico": "💼 Básico",
+        "profesional": "⭐ Profesional",
+        "gestoria": "🏢 Gestoría"
+    }
     st.write(f"Plan: **{iconos_plan.get(plan_actual, plan_actual)}**")
     
     if st.button("🔒 Cerrar sesión"):
@@ -199,7 +213,23 @@ menu = st.sidebar.radio("Navegación", [
     "⚙️ Configuración"
 ])
 
-user_id = st.session_state.user_id
+# Definir user_id de forma segura
+user_id = st.session_state.get("user_id")
+
+# Si no existe, intentar obtenerlo de la sesión
+if not user_id:
+    try:
+        session = supabase.auth.get_session()
+        if session and getattr(session, "user", None):
+            st.session_state.user_id = session.user.id
+            user_id = session.user.id
+    except Exception:
+        user_id = None
+
+# Verificación final
+if not user_id:
+    st.error("No se pudo obtener el ID de usuario. Por favor, inicia sesión de nuevo.")
+    st.stop()
 
 # ════════════════════════════════════════════════════════════
 # SALPICADERO
@@ -1564,6 +1594,11 @@ elif menu == "🔄 Facturación recurrente":
 elif menu == "💳 Suscripción":
     st.title("💳 Planes de Suscripción")
     
+    # Verificación segura de user_id
+    if not user_id:
+        st.error("No se pudo obtener tu ID de usuario. Inicia sesión de nuevo.")
+        st.stop()
+    
     suscripcion = obtener_suscripcion_usuario(user_id)
     plan_actual = suscripcion.get("plan", "free") if suscripcion else "free"
     
@@ -1819,7 +1854,6 @@ elif menu == "🏛️ Impuestos Trimestrales":
     st.subheader("📄 Modelo 303")
     
     if st.button("Generar Modelo 303"):
-        # Obtener NIF del usuario
         try:
             config_res = supabase.table("settings").select("company_tax_id, company_name").eq("user_id", user_id).execute()
             if config_res.data:
@@ -1837,8 +1871,6 @@ elif menu == "🏛️ Impuestos Trimestrales":
         
         with col_desc1:
             st.markdown("**📄 Borrador PDF (Para tu consulta)**")
-            st.caption("Resumen visual con desglose de IVA")
-            
             from weasyprint import HTML
             
             meses_str = {
@@ -1860,9 +1892,7 @@ elif menu == "🏛️ Impuestos Trimestrales":
                 casilla = "Casilla 69/71"
             
             html_pdf = f"""
-            <!DOCTYPE html>
-            <html>
-            <head><meta charset="utf-8"><style>
+            <!DOCTYPE html><html><head><meta charset="utf-8"><style>
             body {{ font-family: Arial; margin: 1.5cm; font-size: 11px; }}
             .header {{ border-bottom: 3px solid #1e3a8a; padding-bottom: 15px; margin-bottom: 25px; }}
             .header h1 {{ color: #1e3a8a; font-size: 22px; }}
@@ -1874,80 +1904,46 @@ elif menu == "🏛️ Impuestos Trimestrales":
             .resultado {{ background-color: #ebf4ff; border: 2px solid #1e3a8a; border-radius: 8px; padding: 15px; margin: 20px 0; text-align: center; }}
             .resultado .importe {{ font-size: 24px; font-weight: bold; color: #1e3a8a; }}
             .aviso {{ background-color: #fff3cd; border: 1px solid #ffc107; padding: 10px; margin: 15px 0; font-size: 10px; }}
-            .footer {{ margin-top: 40px; font-size: 9px; color: #718096; text-align: center; }}
-            </style></head>
-            <body>
-            <div class="header">
-                <h1>MODELO 303 - IVA</h1>
-                <p><strong>Período:</strong> {trimestre} {anio}<br><strong>Meses:</strong> {meses_str}</p>
-            </div>
+            </style></head><body>
+            <div class="header"><h1>MODELO 303 - IVA</h1><p><strong>Período:</strong> {trimestre} {anio}<br><strong>Meses:</strong> {meses_str}</p></div>
             <div class="aviso">⚠️ <strong>BORRADOR INFORMATIVO</strong> - No tiene validez oficial ante la AEAT</div>
             <h2>1. IVA DEVENGADO (Ventas)</h2>
-            <table>
-                <tr><th>Concepto</th><th>Base Imponible</th><th>Cuota Repercutida</th></tr>
-                <tr><td>Régimen general</td><td class="amount">{base_ventas:,.2f} €</td><td class="amount">{iva_repercutido:,.2f} €</td></tr>
-            </table>
+            <table><tr><th>Concepto</th><th>Base Imponible</th><th>Cuota Repercutida</th></tr>
+            <tr><td>Régimen general</td><td class="amount">{base_ventas:,.2f} €</td><td class="amount">{iva_repercutido:,.2f} €</td></tr></table>
             <h2>2. IVA DEDUCIBLE (Compras)</h2>
-            <table>
-                <tr><th>Concepto</th><th>Base Imponible</th><th>Cuota Soportada</th></tr>
-                <tr><td>Adquisiciones corrientes</td><td class="amount">{base_compras:,.2f} €</td><td class="amount">{iva_soportado:,.2f} €</td></tr>
-            </table>
+            <table><tr><th>Concepto</th><th>Base Imponible</th><th>Cuota Soportada</th></tr>
+            <tr><td>Adquisiciones corrientes</td><td class="amount">{base_compras:,.2f} €</td><td class="amount">{iva_soportado:,.2f} €</td></tr></table>
             <h2>3. RESULTADO</h2>
-            <div class="resultado">
-                <div>{casilla}</div>
-                <div class="importe">{resultado_texto}</div>
-            </div>
+            <div class="resultado"><div>{casilla}</div><div class="importe">{resultado_texto}</div></div>
             <h2>4. INFORMACIÓN ADICIONAL</h2>
-            <table>
-                <tr><th>Concepto</th><th>Importe</th></tr>
-                <tr><td>IRPF Retenciones</td><td class="amount">{irpf_retenido:,.2f} €</td></tr>
-                <tr><td>Beneficio neto</td><td class="amount">{beneficio_neto:,.2f} €</td></tr>
-                <tr><td>Pago fraccionado (20%)</td><td class="amount">{pago_fraccionado:,.2f} €</td></tr>
-            </table>
-            <div class="footer">Documento generado el {datetime.now().strftime('%d/%m/%Y a las %H:%M')}</div>
+            <table><tr><th>Concepto</th><th>Importe</th></tr>
+            <tr><td>IRPF Retenciones</td><td class="amount">{irpf_retenido:,.2f} €</td></tr>
+            <tr><td>Beneficio neto</td><td class="amount">{beneficio_neto:,.2f} €</td></tr>
+            <tr><td>Pago fraccionado (20%)</td><td class="amount">{pago_fraccionado:,.2f} €</td></tr></table>
             </body></html>
             """
             
             try:
                 pdf_bytes_303 = HTML(string=html_pdf).write_pdf()
-                st.download_button(
-                    "⬇️ Descargar PDF resumen",
-                    pdf_bytes_303,
-                    f"Modelo_303_{anio}_{trimestre.replace(' ','')}.pdf",
-                    mime="application/pdf",
-                    key="descargar_pdf_303"
-                )
+                st.download_button("⬇️ Descargar PDF resumen", pdf_bytes_303, f"Modelo_303_{anio}_{trimestre.replace(' ','')}.pdf", mime="application/pdf", key="descargar_pdf_303")
             except Exception as e:
                 st.error(f"Error al generar PDF: {e}")
         
         with col_desc2:
             st.markdown("**💻 Fichero AEAT (Importación)**")
-            st.caption("Formato oficial para sede electrónica")
-            
             def fmt_importe(valor):
                 centimos = int(round(valor * 100))
                 return f"{centimos:015d}"
-            
             nif_limpio = nif_emisor.strip().upper().replace(" ", "")[:9].ljust(9)
             nombre_limpio = nombre_emisor.strip()[:29].ljust(29)
             periodo_cod = {"1T (Ene-Mar)": "01", "2T (Abr-Jun)": "02", "3T (Jul-Sep)": "03", "4T (Oct-Dic)": "04"}.get(trimestre, "01")
-            
-            registro = (
-                "01" + nif_limpio + nombre_limpio + str(anio) + " " + periodo_cod + "   " +
-                fmt_importe(base_ventas) + fmt_importe(iva_repercutido) +
-                fmt_importe(base_compras) + fmt_importe(iva_soportado) +
-                fmt_importe(iva_ingresar)
-            )
+            registro = ("01" + nif_limpio + nombre_limpio + str(anio) + " " + periodo_cod + "   " +
+                       fmt_importe(base_ventas) + fmt_importe(iva_repercutido) +
+                       fmt_importe(base_compras) + fmt_importe(iva_soportado) +
+                       fmt_importe(iva_ingresar))
             registro_fin = "99" + " " * 98
             fichero_completo = registro + "\r\n" + registro_fin
-            
-            st.download_button(
-                "⬇️ Descargar fichero AEAT",
-                fichero_completo.encode('utf-8'),
-                f"303_{anio}_{trimestre.replace(' ','')}.txt",
-                mime="text/plain",
-                key="descargar_fichero_303"
-            )
+            st.download_button("⬇️ Descargar fichero AEAT", fichero_completo.encode('utf-8'), f"303_{anio}_{trimestre.replace(' ','')}.txt", mime="text/plain", key="descargar_fichero_303")
             st.warning("⚠️ Verifica el formato con el diseño oficial de la AEAT antes de importar.")
 
 # ════════════════════════════════════════════════════════════
@@ -1981,7 +1977,6 @@ elif menu == "🏦 Conciliación Bancaria":
                 st.error(f"Error al leer CSV: {e}")
     with tab2:
         st.subheader("Importar desde GoCardless (Sandbox)")
-        st.markdown("Conecta tu banco de pruebas y descarga los últimos 30 días automáticamente.")
         if "gocardless_step" not in st.session_state:
             st.session_state.gocardless_step = "idle"
         if st.session_state.gocardless_step == "idle":
@@ -2026,7 +2021,7 @@ elif menu == "🏦 Conciliación Bancaria":
                                     get_bank_transactions.clear()
                                     st.rerun()
                                 except Exception as e:
-                                    st.error(f"Error al vincular factura: {e}")
+                                    st.error(f"Error: {e}")
                 with col2:
                     with st.form(key=f"form_gasto_{idx}"):
                         gastos = get_expenses(user_id)
@@ -2040,7 +2035,7 @@ elif menu == "🏦 Conciliación Bancaria":
                                     get_bank_transactions.clear()
                                     st.rerun()
                                 except Exception as e:
-                                    st.error(f"Error al vincular gasto: {e}")
+                                    st.error(f"Error: {e}")
     else:
         st.info("No hay movimientos bancarios.")
 
@@ -2118,8 +2113,7 @@ elif menu == "📝 Presupuestos":
                 empresa["user_id"] = user_id
         else:
             empresa = {"user_id": user_id, "company_name": AUTONOMO_NAME, "company_tax_id": AUTONOMO_TAX_ID, "company_address": AUTONOMO_ADDRESS, "company_iban": AUTONOMO_IBAN, "company_phone": "", "company_email": "", "company_logo": ""}
-    except Exception as e:
-        st.error(f"Error al cargar configuración: {e}")
+    except Exception:
         empresa = {"user_id": user_id, "company_name": AUTONOMO_NAME, "company_tax_id": AUTONOMO_TAX_ID, "company_address": AUTONOMO_ADDRESS, "company_iban": AUTONOMO_IBAN, "company_phone": "", "company_email": "", "company_logo": ""}
 
     if "editing_budget_id" not in st.session_state:
@@ -2151,11 +2145,10 @@ elif menu == "📝 Presupuestos":
                 try:
                     resp = supabase.table("budgets").select("*").eq("id", budget_id).single().execute()
                     if resp.data:
-                        budget_data = resp.data
                         st.session_state.editing_budget_id = budget_id
-                        st.session_state.edit_budget_data = budget_data
+                        st.session_state.edit_budget_data = resp.data
                 except Exception as e:
-                    st.error(f"Error al cargar presupuesto: {e}")
+                    st.error(f"Error: {e}")
             if st.button("Cancelar edición", key="cancel_edit"):
                 st.session_state.editing_budget_id = None
                 st.session_state.edit_budget_data = None
@@ -2182,7 +2175,6 @@ elif menu == "📝 Presupuestos":
         modo_cliente = st.radio("Seleccionar cliente", ["Existente", "Nuevo (manual)"], horizontal=True, key="modo_cliente")
         if modo_cliente == "Existente":
             if clientes_df.empty:
-                st.warning("No hay clientes registrados. Cambie a modo manual.")
                 cliente = {"name": "", "tax_id": "", "address": ""}
             else:
                 cliente_sel = st.selectbox("Cliente", clientes_df["name"].tolist(), key="cliente_select")
@@ -2195,12 +2187,11 @@ elif menu == "📝 Presupuestos":
                 "address": st.text_input("Dirección", value=cliente_pre["address"], key="manual_address")
             }
 
-        st.markdown("---")
         fecha = st.date_input("Fecha del presupuesto", value=fecha_pre_dt, key="fecha_presupuesto")
         st.subheader("Líneas del presupuesto")
-        num_lineas = st.number_input("Número de líneas", min_value=1, max_value=20, value=max(len(lineas_pre), 1), step=1, key="num_lineas")
+        num_lineas = st.number_input("Número de líneas", min_value=1, max_value=20, value=max(len(lineas_pre), 1), key="num_lineas")
         lista_productos = ["-- Manual --"]
-        if not productos_df.empty and "name" in productos_df.columns:
+        if not productos_df.empty:
             lista_productos += productos_df["name"].tolist()
         lineas = []
         for i in range(int(num_lineas)):
@@ -2215,7 +2206,7 @@ elif menu == "📝 Presupuestos":
                     descripcion_producto = prod_info.iloc[0].get("description", "") if not prod_info.empty else ""
                     desc_manual = st.text_area(f"Descripción {i+1} (editable)", value=descripcion_producto or "", key=f"bud_desc_{i}", height=80)
             with cols[1]:
-                cantidad = st.number_input(f"Cantidad {i+1}", min_value=1.0, value=float(lin_pre["quantity"]) if lin_pre else 1.0, step=1.0, key=f"bud_qty_{i}")
+                cantidad = st.number_input(f"Cantidad {i+1}", min_value=1.0, value=float(lin_pre["quantity"]) if lin_pre else 1.0, key=f"bud_qty_{i}")
             with cols[2]:
                 if prod_sel != "-- Manual --" and not productos_df.empty:
                     prod_row = productos_df[productos_df["name"] == prod_sel]
@@ -2231,9 +2222,9 @@ elif menu == "📝 Presupuestos":
                     precio_default = float(lin_pre["unit_price"]) if lin_pre else 0.0
                     vat_default = float(lin_pre.get("vat_percentage", 21)) if lin_pre else 21.0
                     irpf_default = 0.0
-                precio = st.number_input(f"Precio ud. {i+1}", min_value=0.0, value=precio_default, step=10.0, key=f"bud_price_{i}")
-                vat = st.number_input(f"IVA % {i+1}", value=vat_default, step=1.0, key=f"bud_vat_{i}")
-                irpf = st.number_input(f"IRPF % {i+1}", value=irpf_default, step=1.0, key=f"bud_irpf_{i}")
+                precio = st.number_input(f"Precio ud. {i+1}", min_value=0.0, value=precio_default, key=f"bud_price_{i}")
+                vat = st.number_input(f"IVA % {i+1}", value=vat_default, key=f"bud_vat_{i}")
+                irpf = st.number_input(f"IRPF % {i+1}", value=irpf_default, key=f"bud_irpf_{i}")
             with cols[3]:
                 base_linea = cantidad * precio
                 vat_amount = base_linea * vat / 100
@@ -2255,11 +2246,10 @@ elif menu == "📝 Presupuestos":
         st.subheader("🔍 Vista previa del presupuesto")
         with st.container(border=True):
             st.markdown(f"**{empresa.get('company_name', '')}**")
-            st.markdown(f"{empresa.get('company_address', '')}")
             st.markdown(f"NIF: {empresa.get('company_tax_id', '')}")
             st.markdown("---")
             st.markdown(f"**PRESUPUESTO** (fecha: {fecha.strftime('%d/%m/%Y')})")
-            st.markdown(f"**Cliente:** {cliente.get('name', '')} - NIF: {cliente.get('tax_id', '')}")
+            st.markdown(f"**Cliente:** {cliente.get('name', '')}")
             if lineas:
                 lineas_df = pd.DataFrame(lineas)
                 vista_df = lineas_df[["description", "quantity", "unit_price", "total"]].copy()
@@ -2267,13 +2257,12 @@ elif menu == "📝 Presupuestos":
                 vista_df["Precio ud."] = vista_df["Precio ud."].apply(lambda x: f"{x:,.2f} €")
                 vista_df["Total"] = vista_df["Total"].apply(lambda x: f"{x:,.2f} €")
                 st.dataframe(vista_df, hide_index=True, use_container_width=True)
-            st.markdown("---")
             st.markdown(f"**Base imponible:** {money(base_total)}")
             st.markdown(f"**IVA:** {money(vat_total)}")
             st.markdown(f"### **TOTAL: {money(total)}**")
 
         st.markdown("---")
-        col_acc1, col_acc2, col_acc3 = st.columns(3)
+        col_acc1, col_acc2 = st.columns(2)
         with col_acc1:
             if st.button("💾 Guardar presupuesto", key="guardar_presupuesto"):
                 if not validar_nif_cif(cliente.get("tax_id", "")):
@@ -2289,14 +2278,13 @@ elif menu == "📝 Presupuestos":
                                 "vat_pct": lineas[0]["vat_percentage"] if lineas else 21,
                                 "irpf_pct": lineas[0]["irpf_percentage"] if lineas else 0,
                             }).eq("id", st.session_state.editing_budget_id).execute()
-                            st.success("Presupuesto actualizado correctamente.")
+                            st.success("Presupuesto actualizado.")
                             st.session_state.editing_budget_id = None
                             st.session_state.edit_budget_data = None
                             get_budgets.clear()
-                            time.sleep(0.5)
                             st.rerun()
                         except Exception as e:
-                            st.error(f"Error al actualizar presupuesto: {e}")
+                            st.error(f"Error: {e}")
                     else:
                         budget_number = obtener_siguiente_numero_presupuesto(user_id)
                         data = {
@@ -2311,12 +2299,11 @@ elif menu == "📝 Presupuestos":
                         }
                         try:
                             supabase.table("budgets").insert(data).execute()
-                            st.success(f"Presupuesto {budget_number} guardado correctamente.")
+                            st.success(f"Presupuesto {budget_number} guardado.")
                             get_budgets.clear()
-                            time.sleep(0.5)
                             st.rerun()
                         except Exception as e:
-                            st.error(f"Error al guardar presupuesto: {e}")
+                            st.error(f"Error: {e}")
         with col_acc2:
             if st.button("📄 Generar PDF del presupuesto", key="pdf_presupuesto"):
                 if not validar_nif_cif(cliente.get("tax_id", "")):
@@ -2331,35 +2318,31 @@ elif menu == "📝 Presupuestos":
                         if pdf_bytes:
                             st.download_button("⬇️ Descargar PDF", pdf_bytes, "presupuesto.pdf", mime="application/pdf", key="download_pdf")
                             destinatario = st.text_input("Email para enviar presupuesto", key="email_presupuesto_nuevo", placeholder="cliente@ejemplo.com")
-                            if st.button("📧 Enviar presupuesto por email", key="send_budget_email_nuevo"):
+                            if st.button("📧 Enviar por email", key="send_budget_email_nuevo"):
                                 if not destinatario or "@" not in destinatario:
                                     st.error("Introduce un email válido.")
                                 else:
-                                    with st.spinner("Enviando email..."):
-                                        exito = enviar_factura_email(destinatario, f"Presupuesto {temp_budget_number}", "Adjunto le enviamos el presupuesto solicitado.", pdf_bytes, f"Presupuesto_{temp_budget_number}.pdf")
+                                    with st.spinner("Enviando..."):
+                                        exito = enviar_factura_email(destinatario, f"Presupuesto {temp_budget_number}", "Adjunto le enviamos el presupuesto.", pdf_bytes, f"Presupuesto_{temp_budget_number}.pdf")
                                     if exito:
                                         st.success("Presupuesto enviado correctamente")
                                     else:
                                         st.error("No se pudo enviar el email")
-                    else:
-                        st.error("Faltan datos para generar el presupuesto.")
 
     with tab_historial:
         st.subheader("Presupuestos guardados")
         budgets_df = get_budgets(user_id)
         if not budgets_df.empty:
-            budgets_display = budgets_df[["budget_number", "date", "client_name", "base_total", "total", "status"]].copy()
-            budgets_display.columns = ["Nº Presupuesto", "Fecha", "Cliente", "Base Imponible", "Total", "Estado"]
+            budgets_display = budgets_df[["budget_number", "date", "client_name", "total", "status"]].copy()
+            budgets_display.columns = ["Nº Presupuesto", "Fecha", "Cliente", "Total", "Estado"]
             budgets_display["Fecha"] = pd.to_datetime(budgets_display["Fecha"]).dt.strftime("%d/%m/%Y")
             column_config = {
                 "Nº Presupuesto": st.column_config.TextColumn("Nº Presupuesto", width="small"),
                 "Fecha": st.column_config.TextColumn("Fecha", width="small"),
                 "Cliente": st.column_config.TextColumn("Cliente", width="medium"),
-                "Base Imponible": st.column_config.NumberColumn("Base Imponible", format="%.2f €", width="small"),
                 "Total": st.column_config.NumberColumn("Total", format="%.2f €", width="small"),
                 "Estado": st.column_config.TextColumn("Estado", width="small"),
             }
-            st.markdown("**Haz clic en una fila para ver acciones:**")
             event = st.dataframe(budgets_display, hide_index=True, use_container_width=True, column_config=column_config, selection_mode="single-row", on_select="rerun", key="budgets_table")
             if (event.selection and event.selection.rows and len(event.selection.rows) > 0):
                 selected_row = event.selection.rows[0]
@@ -2374,7 +2357,6 @@ elif menu == "📝 Presupuestos":
                     st.markdown("---")
                     st.subheader(f"Acciones para presupuesto {budget_data['budget_number']}")
                     st.write(f"**Cliente:** {budget_data.get('client_name', '')}")
-                    st.write(f"**Fecha:** {budget_data.get('date', '')}")
                     st.write(f"**Total:** {money(budget_data.get('total', 0))}")
                     try:
                         lineas_db = json.loads(budget_data.get("lines", "[]"))
@@ -2382,53 +2364,22 @@ elif menu == "📝 Presupuestos":
                             st.table(pd.DataFrame(lineas_db)[["description", "quantity", "unit_price", "total"]])
                     except Exception:
                         lineas_db = []
-                    client_d = {"name": budget_data.get("client_name", ""), "tax_id": budget_data.get("client_tax_id", ""), "address": budget_data.get("client_address", "")}
-                    col1, col2, col3, col4 = st.columns(4)
+                    col1, col2, col3 = st.columns(3)
                     with col1:
-                        if st.button("📄 Descargar PDF", key=f"pdf_{budget_id}"):
-                            empresa["user_id"] = user_id
-                            if empresa and client_d and lineas_db:
-                                pdf_bytes = make_budget_pdf(empresa, client_d, lineas_db, budget_data.get("base_total", 0), budget_data.get("vat_total", 0), budget_data.get("total", 0), budget_data.get("vat_pct", 21), budget_number=budget_data.get("budget_number", "---"))
-                                if pdf_bytes:
-                                    st.download_button("Descargar PDF", pdf_bytes, f"Presupuesto_{budget_data['budget_number']}.pdf", mime="application/pdf", key=f"dl_{budget_id}")
-                    with col2:
-                        if st.button("📧 Enviar por email", key=f"email_btn_{budget_id}"):
-                            st.session_state[f"show_email_{budget_id}"] = True
-                        if st.session_state.get(f"show_email_{budget_id}", False):
-                            destinatario = st.text_input("Email del destinatario", key=f"email_dest_{budget_id}", placeholder="cliente@ejemplo.com")
-                            if st.button("✅ Enviar ahora", key=f"send_{budget_id}"):
-                                if not destinatario or "@" not in destinatario:
-                                    st.error("Introduce un email válido.")
-                                else:
-                                    empresa["user_id"] = user_id
-                                    if empresa and client_d and lineas_db:
-                                        pdf_bytes = make_budget_pdf(empresa, client_d, lineas_db, budget_data.get("base_total", 0), budget_data.get("vat_total", 0), budget_data.get("total", 0), budget_data.get("vat_pct", 21), budget_number=budget_data.get("budget_number", "---"))
-                                        if pdf_bytes:
-                                            with st.spinner("Enviando email..."):
-                                                exito = enviar_factura_email(destinatario, f"Presupuesto {budget_data['budget_number']}", "Adjunto le enviamos el presupuesto solicitado.", pdf_bytes, f"Presupuesto_{budget_data['budget_number']}.pdf")
-                                            if exito:
-                                                st.success("Presupuesto enviado correctamente")
-                                                st.session_state[f"show_email_{budget_id}"] = False
-                                                time.sleep(1)
-                                                st.rerun()
-                                            else:
-                                                st.error("No se pudo enviar el email")
-                    with col3:
                         if st.button("✏️ Editar", key=f"edit_{budget_id}"):
                             st.session_state.editing_budget_id = budget_id
                             st.session_state.edit_budget_data = budget_data
                             st.rerun()
-                    with col4:
+                    with col2:
                         confirmado = st.checkbox("Confirmar eliminación", key=f"confirm_del_{budget_id}")
                         if st.button("🗑️ Eliminar", key=f"del_{budget_id}", disabled=not confirmado):
                             try:
                                 supabase.table("budgets").delete().eq("id", budget_id).execute()
                                 st.success("Presupuesto eliminado.")
                                 get_budgets.clear()
-                                time.sleep(0.5)
                                 st.rerun()
                             except Exception as e:
-                                st.error(f"Error al eliminar presupuesto: {e}")
+                                st.error(f"Error: {e}")
         else:
             st.info("No hay presupuestos guardados aún.")
 
@@ -2447,8 +2398,7 @@ elif menu == "⚙️ Configuración":
     try:
         config_res = supabase.table("settings").select("*").eq("user_id", user_id).execute()
         settings = config_res.data[0] if config_res.data else {}
-    except Exception as e:
-        st.error(f"Error al cargar configuración: {e}")
+    except Exception:
         settings = {}
     company_name = settings.get("company_name") or AUTONOMO_NAME
     tax_id = settings.get("company_tax_id") or AUTONOMO_TAX_ID
@@ -2483,11 +2433,11 @@ elif menu == "⚙️ Configuración":
         if st.form_submit_button("Guardar datos fiscales"):
             tax_val = (tax_id or "").strip()
             if tax_val and not validar_nif_cif(tax_val):
-                st.error("El NIF/CIF de la empresa no es válido.")
+                st.error("El NIF/CIF no es válido.")
             else:
                 iban_val = (iban or "").strip()
                 if iban_val and not validar_iban(iban_val):
-                    st.error("El IBAN introducido no es válido.")
+                    st.error("El IBAN no es válido.")
                 else:
                     data = {
                         "user_id": user_id, "company_name": company_name.strip(),
@@ -2502,7 +2452,7 @@ elif menu == "⚙️ Configuración":
                         st.success("Datos fiscales actualizados correctamente")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Error al guardar configuración: {e}")
+                        st.error(f"Error: {e}")
 
     # ============ GESTIÓN DE CERTIFICADO DIGITAL ============
     st.markdown("---")
