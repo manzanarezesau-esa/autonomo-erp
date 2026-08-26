@@ -6,7 +6,7 @@ from datetime import datetime, date
 def generar_pdf_303(anio, trimestre, base_ventas, iva_repercutido, base_compras, iva_soportado, irpf_retenido, beneficio_neto, pago_fraccionado, iva_ingresar):
     """
     Genera un PDF estructurado del Modelo 303 para el usuario.
-    Usa WeasyPrint (ya instalado) para crear un HTML y convertirlo a PDF.
+    Usa WeasyPrint para crear un HTML y convertirlo a PDF.
     """
     from weasyprint import HTML
     
@@ -221,20 +221,23 @@ def generar_pdf_303(anio, trimestre, base_ventas, iva_repercutido, base_compras,
 def generar_fichero_aeat_303(anio, trimestre, base_ventas, iva_repercutido, base_compras, iva_soportado, nif_emisor, nombre_emisor):
     """
     Genera el fichero de importación AEAT para el Modelo 303.
-    Sigue el diseño de registro oficial de la AEAT (Registro tipo 1).
     
-    Formato del registro tipo 1 (Modelo 303):
-    Posiciones 1-2: Tipo de registro (01 para registro de datos)
-    Posiciones 3-11: NIF del declarante (9 caracteres)
-    Posiciones 12-40: Apellidos y nombre (29 caracteres)
-    Posiciones 41-45: Ejercicio (4 caracteres + 1 espacio)
-    Posiciones 46-50: Período (2 caracteres + 3 espacios)
-    Posiciones 51-65: Casilla 01 (Base imponible - 15 caracteres con signo)
-    Posiciones 66-80: Casilla 04 (Cuota devengada - 15 caracteres)
-    ... (continúa con todas las casillas)
+    Formato del registro tipo 1 según especificación AEAT:
+    - Posiciones 1-2: Tipo de registro (01)
+    - Posiciones 3-11: NIF del declarante (9 caracteres)
+    - Posiciones 12-40: Apellidos y nombre (29 caracteres)
+    - Posiciones 41-44: Ejercicio (4 dígitos)
+    - Posiciones 45-46: Período (2 dígitos: 01, 02, 03, 04)
+    - Posiciones 47-51: Espacios reservados
+    - Posiciones 52-66: Casilla 01 (Base imponible - 15 caracteres)
+    - Posiciones 67-81: Casilla 04 (Cuota devengada - 15 caracteres)
+    - Posiciones 82-96: Casilla 19 (Base deducible - 15 caracteres)
+    - Posiciones 97-111: Casilla 22 (Cuota soportada - 15 caracteres)
+    - Posiciones 112-126: Casilla 69/71 (Resultado - 15 caracteres con signo)
     
-    NOTA: Esta es una versión simplificada. El formato exacto debe validarse
-    con el diseño oficial de la AEAT antes de usar.
+    Formato del registro tipo 2 (fin):
+    - Posiciones 1-2: Tipo de registro (99)
+    - Posiciones 3-100: Espacios
     """
     
     # Mapear trimestre a código de período AEAT
@@ -246,39 +249,113 @@ def generar_fichero_aeat_303(anio, trimestre, base_ventas, iva_repercutido, base
     }
     periodo = periodo_codigo.get(trimestre, "01")
     
-    # Formatear NIF (9 caracteres, sin espacios)
-    nif_limpio = nif_emisor.strip().upper().replace(" ", "")[:9].ljust(9)
+    # Formatear NIF (9 caracteres, sin espacios, mayúsculas)
+    nif_limpio = nif_emisor.strip().upper().replace(" ", "").replace("-", "")
+    # Asegurar que tenga exactamente 9 caracteres
+    nif_limpio = nif_limpio[:9].ljust(9)
     
     # Formatear nombre (29 caracteres)
     nombre_limpio = nombre_emisor.strip()[:29].ljust(29)
     
-    # Formatear ejercicio (4 dígitos)
-    ejercicio = str(anio)[:4]
+    # Ejercicio (4 dígitos)
+    ejercicio = str(anio)[:4].rjust(4, "0")
     
-    # Función para formatear importes (15 posiciones, 2 decimales, sin punto)
-    def formatear_importe(valor):
-        # Convertir a céntimos y formatear a 15 caracteres con ceros a la izquierda
-        centimos = int(round(valor * 100))
-        if centimos < 0:
-            # Negativo: usar complemento a 10 o formato especial
-            return f"-{abs(centimos):013d}"
+    # Función para formatear importes AEAT (15 posiciones)
+    # Los importes se formatean en céntimos, sin decimales
+    # Los valores positivos van sin signo
+    # Los valores negativos usan signo "-" al inicio
+    def formatear_importe_positivo(valor):
+        """Formatea importe positivo (15 posiciones, sin signo)"""
+        centimos = int(round(abs(valor) * 100))
         return f"{centimos:015d}"
     
-    # Construir el registro tipo 1
-    registro = (
-        "01" +                     # Tipo de registro
-        nif_limpio +               # NIF declarante
-        nombre_limpio +            # Nombre
-        ejercicio + " " +          # Ejercicio
-        periodo + "   " +          # Período
-        formatear_importe(base_ventas) +       # Casilla 01: Base imponible
-        formatear_importe(iva_repercutido) +   # Casilla 04: Cuota devengada
-        formatear_importe(base_compras) +      # Casilla 19: Base deducible
-        formatear_importe(iva_soportado) +     # Casilla 22: Cuota soportada
-        formatear_importe(iva_repercutido - iva_soportado)  # Casilla 69/71: Resultado
+    def formatear_importe_con_signo(valor):
+        """Formatea importe con signo (15 posiciones, con signo si negativo)"""
+        if valor >= 0:
+            centimos = int(round(valor * 100))
+            return f"{centimos:015d}"
+        else:
+            centimos = int(round(abs(valor) * 100))
+            return f"-{centimos:014d}"
+    
+    # Calcular resultado
+    resultado = iva_repercutido - iva_soportado
+    
+    # Construir registro tipo 1
+    # Total: 100 caracteres
+    registro_1 = (
+        "01" +                          # Tipo de registro (2)
+        nif_limpio +                    # NIF (9) -> Posiciones 3-11
+        nombre_limpio +                 # Nombre (29) -> Posiciones 12-40
+        ejercicio +                     # Ejercicio (4) -> Posiciones 41-44
+        periodo +                       # Período (2) -> Posiciones 45-46
+        " " * 5 +                       # Espacios reservados (5) -> Posiciones 47-51
+        formatear_importe_positivo(base_ventas) +      # Casilla 01 (15) -> Posiciones 52-66
+        formatear_importe_positivo(iva_repercutido) +  # Casilla 04 (15) -> Posiciones 67-81
+        formatear_importe_positivo(base_compras) +     # Casilla 19 (15) -> Posiciones 82-96
+        formatear_importe_positivo(iva_soportado) +    # Casilla 22 (15) -> Posiciones 97-111
+        formatear_importe_con_signo(resultado)         # Casilla 69/71 (15) -> Posiciones 112-126
     )
     
-    # Añadir registro de fin de archivo (tipo 99)
-    registro_fin = "99" + " " * 98  # Registro de fin con espacios
+    # Asegurar que el registro tenga exactamente 100 caracteres
+    registro_1 = registro_1[:100].ljust(100)
     
-    return registro + "\r\n" + registro_fin
+    # Construir registro de fin (tipo 99)
+    registro_fin = "99" + " " * 98  # Total: 100 caracteres
+    
+    # Unir con CRLF (Windows) o LF (Unix)
+    # La AEAT acepta ambos, pero CRLF es más seguro
+    fichero_completo = registro_1 + "\r\n" + registro_fin
+    
+    return fichero_completo
+
+
+def validar_fichero_aeat(contenido):
+    """
+    Valida la estructura del fichero AEAT generado.
+    
+    Parámetros:
+    - contenido: String del fichero completo
+    
+    Retorna:
+    - (es_valido, mensaje)
+    """
+    lineas = contenido.split('\r\n')
+    
+    if not lineas:
+        return False, "El fichero está vacío"
+    
+    # Verificar registro inicial
+    if len(lineas) < 2:
+        return False, "El fichero debe tener al menos 2 registros"
+    
+    # Verificar primer registro
+    if lineas[0][:2] != "01":
+        return False, "El primer registro debe ser tipo 01"
+    
+    if len(lineas[0]) != 100:
+        return False, f"El registro 01 debe tener 100 caracteres (tiene {len(lineas[0])})"
+    
+    # Verificar registro final
+    if lineas[-1][:2] != "99":
+        return False, "El último registro debe ser tipo 99"
+    
+    if len(lineas[-1]) != 100:
+        return False, f"El registro 99 debe tener 100 caracteres (tiene {len(lineas[-1])})"
+    
+    # Verificar NIF (posiciones 3-11)
+    nif = lineas[0][2:11]
+    if not nif or nif.isspace():
+        return False, "NIF vacío en el registro"
+    
+    # Verificar ejercicio (posiciones 41-44)
+    ejercicio = lineas[0][40:44]
+    if not ejercicio.isdigit():
+        return False, "Ejercicio no numérico"
+    
+    # Verificar período (posiciones 45-46)
+    periodo = lineas[0][44:46]
+    if periodo not in ["01", "02", "03", "04"]:
+        return False, "Período inválido"
+    
+    return True, "✅ Estructura del fichero válida"
