@@ -3,6 +3,7 @@ import streamlit as st
 import stripe
 from database import _get_supabase
 from datetime import datetime, timezone
+import time
 
 
 def init_stripe():
@@ -85,7 +86,7 @@ def crear_checkout_session(user_id, email, plan):
         st.error("Stripe no está configurado.")
         return None
     
-    # Precios de Stripe (configúralos en el dashboard de Stripe)
+    # Precios de Stripe configurados en secrets
     PRECIOS = {
         "basico": st.secrets.get("STRIPE_PRICE_BASICO", ""),
         "profesional": st.secrets.get("STRIPE_PRICE_PROFESIONAL", ""),
@@ -169,11 +170,11 @@ def verificar_acceso(user_id, plan_requerido="basico"):
     """
     niveles = {"free": 0, "basico": 1, "profesional": 2, "gestoria": 3}
     
-    suscripcion = obtener_suscripcion_usuario(user_id)
-    if not suscripcion:
+    try:
+        suscripcion = obtener_suscripcion_usuario(user_id)
+        plan_actual = suscripcion.get("plan", "free") if suscripcion else "free"
+    except Exception:
         plan_actual = "free"
-    else:
-        plan_actual = suscripcion.get("plan", "free")
     
     nivel_actual = niveles.get(plan_actual, 0)
     nivel_requerido = niveles.get(plan_requerido, 0)
@@ -334,7 +335,6 @@ def procesar_webhook(payload, sig_header):
         
         elif event["type"] == "customer.subscription.deleted":
             subscription = event["data"]["object"]
-            # Buscar usuario por subscription_id
             supabase = _get_supabase()
             result = supabase.table("subscriptions")\
                 .select("user_id")\
@@ -350,6 +350,23 @@ def procesar_webhook(payload, sig_header):
                     "stripe_subscription_id": None
                 }).eq("user_id", user_id).execute()
             
+            return True
+        
+        elif event["type"] == "invoice.payment_failed":
+            # Pago fallido - marcar suscripción como problemática
+            invoice = event["data"]["object"]
+            customer_id = invoice.get("customer")
+            if customer_id:
+                supabase = _get_supabase()
+                result = supabase.table("subscriptions")\
+                    .select("user_id")\
+                    .eq("stripe_customer_id", customer_id)\
+                    .single()\
+                    .execute()
+                if result.data:
+                    supabase.table("subscriptions").update({
+                        "status": "payment_failed"
+                    }).eq("user_id", result.data["user_id"]).execute()
             return True
         
         return True
@@ -378,3 +395,60 @@ def procesar_success_url():
             st.rerun()
         else:
             st.warning("El pago aún no se ha confirmado. Puede tardar unos segundos.")
+
+
+def obtener_info_plan(plan):
+    """
+    Obtiene información del plan.
+    
+    Parámetros:
+    - plan: 'free', 'basico', 'profesional', 'gestoria'
+    
+    Retorna:
+    - Diccionario con nombre, precio y características
+    """
+    planes = {
+        "free": {
+            "nombre": "🆓 Gratis",
+            "precio": "0 €/mes",
+            "caracteristicas": [
+                "3 facturas/mes",
+                "PDF básico",
+                "Clientes y productos"
+            ]
+        },
+        "basico": {
+            "nombre": "💼 Básico",
+            "precio": "15 €/mes",
+            "caracteristicas": [
+                "Facturas ilimitadas",
+                "PDF con QR",
+                "Envío por email",
+                "Presupuestos"
+            ]
+        },
+        "profesional": {
+            "nombre": "⭐ Profesional",
+            "precio": "30 €/mes",
+            "caracteristicas": [
+                "Veri*Factu completo",
+                "FacturaE XML firmado XAdES-T",
+                "Hash encadenado SHA-256",
+                "QR verificable AEAT",
+                "Contabilidad",
+                "Modelo 303"
+            ]
+        },
+        "gestoria": {
+            "nombre": "🏢 Gestoría",
+            "precio": "60 €/mes",
+            "caracteristicas": [
+                "Multi-usuario",
+                "API REST",
+                "Soporte prioritario",
+                "Informes avanzados",
+                "Exportación a Excel"
+            ]
+        }
+    }
+    return planes.get(plan, planes["free"])
