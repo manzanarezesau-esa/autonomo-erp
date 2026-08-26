@@ -1,4 +1,3 @@
-# facturae_utils.py
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
 import streamlit as st
@@ -6,120 +5,215 @@ from firma_xades import firmar_facturae_xml
 from facturae_validator import validar_facturae_completo
 from certificate_manager import obtener_certificado_usuario
 
+# Espacio de nombres oficial de FacturaE v3.2.2
+NS = "http://www.facturae.gob.es/formato/Versiones/Facturaev3_2_2.xml"
+ET.register_namespace("fe", NS)
+ET.register_namespace("ds", "http://www.w3.org/2000/09/xmldsig#")
+
+def _qn(tag):
+    """Genera el Qualified Name con Namespace"""
+    return f"{{{NS}}}{tag}"
+
+def _safe_float(val, default=0.0):
+    """Evita errores de float(None) o cadenas vacías"""
+    if val is None:
+        return default
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return default
+
+def _safe_str(val, default=""):
+    """Evita errores de conversión a string"""
+    if val is None:
+        return default
+    return str(val).strip()
 
 def generar_facturae_xml(invoice, client, company, lineas, user_id=None, firmar=False, certificado=None, password=None, validar=True, usar_timestamp=True):
-    """
-    Genera un XML compatible con FacturaE v3.2.2.
-    Opcionalmente valida y firma con XAdES-EPES o XAdES-T.
+    invoice = invoice or {}
+    client = client or {}
+    company = company or {}
+    lineas = lineas or []
+
+    root = ET.Element(_qn("Facturae"))
     
-    Parámetros:
-    - invoice: Diccionario con datos de la factura
-    - client: Diccionario con datos del cliente
-    - company: Diccionario con datos de la empresa emisora
-    - lineas: Lista de líneas de factura
-    - user_id: ID del usuario (para obtener su certificado automáticamente)
-    - firmar: Boolean para firmar o no
-    - certificado: Bytes del certificado P12 (opcional si user_id proporcionado)
-    - password: Contraseña del certificado (opcional si user_id proporcionado)
-    - validar: Boolean para validar contra XSD antes de firmar
-    - usar_timestamp: Boolean para añadir timestamp XAdES-T
+    # 1. FileHeader
+    file_header = ET.SubElement(root, _qn("FileHeader"))
+    ET.SubElement(file_header, _qn("SchemaVersion")).text = "3.2.2"
+    ET.SubElement(file_header, _qn("Modality")).text = "I"
+    ET.SubElement(file_header, _qn("InvoiceIssuerType")).text = "EM"
     
-    Retorna:
-    - XML generado (firmado si se solicita) como string
-    """
-    ns = "http://www.facturae.gob.es/formato/Versiones/Facturaev3_2_2.xml"
+    total_factura = _safe_float(invoice.get("total"))
+    inv_num = _safe_str(invoice.get("invoice_number"), "FAC-001")
     
-    # Crear elemento raíz con namespace
-    root = ET.Element("fe:Facturae", {"xmlns:fe": ns})
+    batch = ET.SubElement(file_header, _qn("Batch"))
+    ET.SubElement(batch, _qn("BatchIdentifier")).text = inv_num
+    ET.SubElement(batch, _qn("InvoicesCount")).text = "1"
     
-    # FileHeader
-    file_header = ET.SubElement(root, "fe:FileHeader")
-    schema_version = ET.SubElement(file_header, "fe:SchemaVersion")
-    schema_version.text = "3.2.2"
-    modality = ET.SubElement(file_header, "fe:Modality")
-    modality.text = "I"
-    invoice_issuer_type = ET.SubElement(file_header, "fe:InvoiceIssuerType")
-    invoice_issuer_type.text = "EM"
+    tot_inv_amt = ET.SubElement(batch, _qn("TotalInvoicesAmount"))
+    ET.SubElement(tot_inv_amt, _qn("TotalAmount")).text = f"{total_factura:.2f}"
     
-    # Parties - Seller
-    parties = ET.SubElement(root, "fe:Parties")
-    seller_party = ET.SubElement(parties, "fe:SellerParty")
-    seller_tax_id = ET.SubElement(seller_party, "fe:TaxIdentification")
-    seller_tax_type = ET.SubElement(seller_tax_id, "fe:TaxIdentificationType")
-    seller_tax_type.text = "01"
-    seller_tax_number = ET.SubElement(seller_tax_id, "fe:TaxIdentificationNumber")
-    seller_tax_number.text = company.get("company_tax_id", "")
+    tot_out_amt = ET.SubElement(batch, _qn("TotalOutstandingAmount"))
+    ET.SubElement(tot_out_amt, _qn("TotalAmount")).text = f"{total_factura:.2f}"
     
-    # Parties - Buyer
-    buyer_party = ET.SubElement(parties, "fe:BuyerParty")
-    buyer_tax_id = ET.SubElement(buyer_party, "fe:TaxIdentification")
-    buyer_tax_type = ET.SubElement(buyer_tax_id, "fe:TaxIdentificationType")
-    buyer_tax_type.text = "01"
-    buyer_tax_number = ET.SubElement(buyer_tax_id, "fe:TaxIdentificationNumber")
-    buyer_tax_number.text = client.get("tax_id", "")
+    tot_exe_amt = ET.SubElement(batch, _qn("TotalExecutableAmount"))
+    ET.SubElement(tot_exe_amt, _qn("TotalAmount")).text = f"{total_factura:.2f}"
     
-    # Invoices
-    invoices = ET.SubElement(root, "fe:Invoices")
-    invoice_elem = ET.SubElement(invoices, "fe:Invoice")
+    ET.SubElement(batch, _qn("InvoiceCurrencyCode")).text = "EUR"
     
-    invoice_number = ET.SubElement(invoice_elem, "fe:InvoiceNumber")
-    invoice_number.text = invoice.get("invoice_number", "")
+    # 2. Parties
+    parties = ET.SubElement(root, _qn("Parties"))
     
-    issue_date = ET.SubElement(invoice_elem, "fe:IssueDate")
-    issue_date.text = invoice.get("date", "")
+    # Emisor
+    seller_party = ET.SubElement(parties, _qn("SellerParty"))
+    seller_tax = ET.SubElement(seller_party, _qn("TaxIdentification"))
+    cif_emisor = _safe_str(company.get("company_tax_id") or company.get("tax_id"), "B00000000").upper()
     
-    # InvoiceTotals
-    totals = ET.SubElement(invoice_elem, "fe:InvoiceTotals")
-    total_gross = ET.SubElement(totals, "fe:TotalGrossAmount")
-    total_gross.text = f"{invoice.get('base_amount', 0):.2f}"
-    total_tax = ET.SubElement(totals, "fe:TotalTaxOutputs")
-    total_tax.text = f"{invoice.get('vat_amount', 0):.2f}"
-    total_invoice = ET.SubElement(totals, "fe:InvoiceTotal")
-    total_invoice.text = f"{invoice.get('total', 0):.2f}"
+    ET.SubElement(seller_tax, _qn("PersonTypeCode")).text = "J"
+    ET.SubElement(seller_tax, _qn("ResidenceTypeCode")).text = "R"
+    ET.SubElement(seller_tax, _qn("TaxIdentificationNumber")).text = cif_emisor
     
-    # Items
-    items = ET.SubElement(invoice_elem, "fe:Items")
+    seller_legal = ET.SubElement(seller_party, _qn("LegalEntity"))
+    ET.SubElement(seller_legal, _qn("CorporateName")).text = _safe_str(company.get("company_name") or company.get("name"), "Empresa Emisora")
+    
+    seller_addr = ET.SubElement(seller_legal, _qn("AddressInSpain"))
+    ET.SubElement(seller_addr, _qn("Address")).text = _safe_str(company.get("company_address") or company.get("address"), "Calle Principal 1")
+    ET.SubElement(seller_addr, _qn("PostCode")).text = _safe_str(company.get("post_code"), "28001")
+    ET.SubElement(seller_addr, _qn("Town")).text = _safe_str(company.get("town"), "Madrid")
+    ET.SubElement(seller_addr, _qn("Province")).text = _safe_str(company.get("province"), "Madrid")
+    ET.SubElement(seller_addr, _qn("CountryCode")).text = "ESP"
+    
+    # Receptor
+    buyer_party = ET.SubElement(parties, _qn("BuyerParty"))
+    buyer_tax = ET.SubElement(buyer_party, _qn("TaxIdentification"))
+    cif_receptor = _safe_str(client.get("tax_id"), "A00000000").upper()
+    
+    ET.SubElement(buyer_tax, _qn("PersonTypeCode")).text = "J"
+    ET.SubElement(buyer_tax, _qn("ResidenceTypeCode")).text = "R"
+    ET.SubElement(buyer_tax, _qn("TaxIdentificationNumber")).text = cif_receptor
+    
+    buyer_legal = ET.SubElement(buyer_party, _qn("LegalEntity"))
+    ET.SubElement(buyer_legal, _qn("CorporateName")).text = _safe_str(client.get("name"), "Cliente")
+    
+    buyer_addr = ET.SubElement(buyer_legal, _qn("AddressInSpain"))
+    ET.SubElement(buyer_addr, _qn("Address")).text = _safe_str(client.get("address"), "Calle Cliente 1")
+    ET.SubElement(buyer_addr, _qn("PostCode")).text = _safe_str(client.get("post_code"), "28001")
+    ET.SubElement(buyer_addr, _qn("Town")).text = _safe_str(client.get("town"), "Madrid")
+    ET.SubElement(buyer_addr, _qn("Province")).text = _safe_str(client.get("province"), "Madrid")
+    ET.SubElement(buyer_addr, _qn("CountryCode")).text = "ESP"
+    
+    # 3. Invoices
+    invoices = ET.SubElement(root, _qn("Invoices"))
+    invoice_elem = ET.SubElement(invoices, _qn("Invoice"))
+    
+    invoice_header = ET.SubElement(invoice_elem, _qn("InvoiceHeader"))
+    ET.SubElement(invoice_header, _qn("InvoiceNumber")).text = inv_num
+    ET.SubElement(invoice_header, _qn("DocumentTypeId")).text = "FC"
+    ET.SubElement(invoice_header, _qn("InvoiceClass")).text = "OR" if invoice.get("tipo") == "rectificativa" else "OO"
+    
+    invoice_issue = ET.SubElement(invoice_elem, _qn("InvoiceIssueData"))
+    ET.SubElement(invoice_issue, _qn("IssueDate")).text = _safe_str(invoice.get("date"), "2026-01-01")
+    ET.SubElement(invoice_issue, _qn("InvoiceCurrencyCode")).text = "EUR"
+    ET.SubElement(invoice_issue, _qn("TaxCurrencyCode")).text = "EUR"
+    ET.SubElement(invoice_issue, _qn("LanguageCode")).text = "es"
+    
+    base_amt = _safe_float(invoice.get("base_amount"))
+    vat_pct = _safe_float(invoice.get("vat_percentage"), 21.0)
+    vat_amt = _safe_float(invoice.get("vat_amount"))
+    irpf_pct = _safe_float(invoice.get("irpf_percentage"))
+    irpf_amt = _safe_float(invoice.get("irpf_amount"))
+    
+    taxes_outputs = ET.SubElement(invoice_elem, _qn("TaxesOutputs"))
+    tax = ET.SubElement(taxes_outputs, _qn("Tax"))
+    ET.SubElement(tax, _qn("TaxTypeCode")).text = "01"
+    ET.SubElement(tax, _qn("TaxRate")).text = f"{vat_pct:.2f}"
+    
+    tx_base = ET.SubElement(tax, _qn("TaxableBase"))
+    ET.SubElement(tx_base, _qn("TotalAmount")).text = f"{base_amt:.2f}"
+    
+    tx_amt = ET.SubElement(tax, _qn("TaxAmount"))
+    ET.SubElement(tx_amt, _qn("TotalAmount")).text = f"{vat_amt:.2f}"
+    
+    if irpf_pct > 0:
+        taxes_withheld = ET.SubElement(invoice_elem, _qn("TaxesWithheld"))
+        tax_w = ET.SubElement(taxes_withheld, _qn("Tax"))
+        ET.SubElement(tax_w, _qn("TaxTypeCode")).text = "04"
+        ET.SubElement(tax_w, _qn("TaxRate")).text = f"{irpf_pct:.2f}"
+        
+        tx_w_base = ET.SubElement(tax_w, _qn("TaxableBase"))
+        ET.SubElement(tx_w_base, _qn("TotalAmount")).text = f"{base_amt:.2f}"
+        
+        tx_w_amt = ET.SubElement(tax_w, _qn("TaxAmount"))
+        ET.SubElement(tx_w_amt, _qn("TotalAmount")).text = f"{irpf_amt:.2f}"
+
+    totals = ET.SubElement(invoice_elem, _qn("InvoiceTotals"))
+    ET.SubElement(totals, _qn("TotalGrossAmount")).text = f"{base_amt:.2f}"
+    ET.SubElement(totals, _qn("TotalGeneralDiscounts")).text = "0.00"
+    ET.SubElement(totals, _qn("TotalGeneralSurcharges")).text = "0.00"
+    ET.SubElement(totals, _qn("TotalGrossAmountBeforeTaxes")).text = f"{base_amt:.2f}"
+    ET.SubElement(totals, _qn("TotalTaxOutputs")).text = f"{vat_amt:.2f}"
+    
+    if irpf_pct > 0:
+        ET.SubElement(totals, _qn("TotalTaxesWithheld")).text = f"{irpf_amt:.2f}"
+        
+    ET.SubElement(totals, _qn("InvoiceTotal")).text = f"{total_factura:.2f}"
+    ET.SubElement(totals, _qn("TotalOutstandingAmount")).text = f"{total_factura:.2f}"
+    ET.SubElement(totals, _qn("TotalExecutableAmount")).text = f"{total_factura:.2f}"
+    
+    items = ET.SubElement(invoice_elem, _qn("Items"))
     for linea in lineas:
-        item = ET.SubElement(items, "fe:InvoiceLine")
-        item_desc = ET.SubElement(item, "fe:ItemDescription")
-        item_desc.text = linea.get("description", "")
-        quantity = ET.SubElement(item, "fe:Quantity")
-        quantity.text = str(linea.get("quantity", 1))
-        unit_price = ET.SubElement(item, "fe:UnitPriceWithoutTax")
-        unit_price.text = f"{linea.get('unit_price', 0):.2f}"
-        total_cost = ET.SubElement(item, "fe:TotalCost")
-        total_cost.text = f"{linea.get('total', 0):.2f}"
+        linea = linea or {}
+        item = ET.SubElement(items, _qn("InvoiceLine"))
+        ET.SubElement(item, _qn("ItemDescription")).text = _safe_str(linea.get("description"), "Servicio")
+        ET.SubElement(item, _qn("Quantity")).text = f"{_safe_float(linea.get('quantity'), 1.0):.2f}"
+        ET.SubElement(item, _qn("UnitPriceWithoutTax")).text = f"{_safe_float(linea.get('unit_price')):.2f}"
+        
+        line_base = _safe_float(linea.get("base_amount") or linea.get("total"))
+        ET.SubElement(item, _qn("TotalCost")).text = f"{line_base:.2f}"
+        ET.SubElement(item, _qn("GrossAmount")).text = f"{line_base:.2f}"
+        
+        line_taxes = ET.SubElement(item, _qn("TaxesOutputs"))
+        line_tax = ET.SubElement(line_taxes, _qn("Tax"))
+        ET.SubElement(line_tax, _qn("TaxTypeCode")).text = "01"
+        ET.SubElement(line_tax, _qn("TaxRate")).text = f"{vat_pct:.2f}"
+        
+        lt_base = ET.SubElement(line_tax, _qn("TaxableBase"))
+        ET.SubElement(lt_base, _qn("TotalAmount")).text = f"{line_base:.2f}"
+        
+        lt_amt = ET.SubElement(line_tax, _qn("TaxAmount")).text = f"{(line_base * vat_pct / 100):.2f}"
+
+    payment_details = ET.SubElement(invoice_elem, _qn("PaymentDetails"))
+    installment = ET.SubElement(payment_details, _qn("Installment"))
+    ET.SubElement(installment, _qn("InstallmentDueDate")).text = _safe_str(invoice.get("date"), "2026-01-01")
+    ET.SubElement(installment, _qn("InstallmentAmount")).text = f"{total_factura:.2f}"
+    ET.SubElement(installment, _qn("PaymentMethod")).text = "04"
     
-    # Convertir a string con formato
-    xml_str = ET.tostring(root, encoding='utf-8', method='xml')
-    dom = minidom.parseString(xml_str)
-    pretty_xml = dom.toprettyxml(indent="  ")
+    iban = _safe_str(company.get("company_iban")).replace(" ", "")
+    if iban:
+        account = ET.SubElement(installment, _qn("AccountToBeCredited"))
+        ET.SubElement(account, _qn("IBAN")).text = iban
+
+    xml_bytes = ET.tostring(root, encoding="utf-8", method="xml")
+    dom = minidom.parseString(xml_bytes)
+    pretty_xml = "\n".join([line for line in dom.toprettyxml(indent="  ").split("\n") if line.strip()])
     
-    # Validar contra XSD si se solicita
     if validar:
         es_valido, mensaje = validar_facturae_completo(pretty_xml)
-        
         if not es_valido:
             st.error(f"### El XML no cumple con el esquema FacturaE v3.2.2\n\n{mensaje}")
             st.warning("Puede descargar el XML sin validar, pero no será válido oficialmente.")
         else:
             st.success("✅ XML validado correctamente contra el esquema oficial FacturaE v3.2.2")
-    
-    # Firmar si se solicita
+            
     if firmar:
-        # Si no se proporcionó certificado directamente, obtener del usuario
         if certificado is None and password is None and user_id:
             certificado, password = obtener_certificado_usuario(user_id)
-        
         if certificado and password:
-            pretty_xml = firmar_facturae_xml(
-                pretty_xml,
-                certificado,
-                password,
-                usar_timestamp=usar_timestamp
-            )
+            pretty_xml = firmar_facturae_xml(pretty_xml, certificado, password, usar_timestamp=usar_timestamp)
         else:
             st.warning("No se encontró certificado para firmar. El XML se generará sin firma.")
-    
+            
     return pretty_xml
 
+def generar_facturae_xml_simplificada(invoice, client, company, lineas):
+    return generar_facturae_xml(invoice, client, company, lineas, firmar=False, validar=False)
