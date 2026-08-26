@@ -21,7 +21,7 @@ from database import (
 )
 from pdf_utils import make_invoice_pdf_from_template, make_budget_pdf
 from email_utils import enviar_factura_email
-from banking import iniciar_conexion_gocardless, completar_importacion
+from banking import iniciar_conexion_gocardless, completar_importacion, obtener_token_gocardless, obtener_bancos_disponibles
 from auth_utils import login_user, register_user, reset_password, logout, APP_URL
 from data_service import (
     get_invoices, get_clients, get_suppliers, get_products, get_expenses,
@@ -36,6 +36,7 @@ from stripe_utils import (
     cancelar_suscripcion, verificar_acceso, procesar_success_url,
     obtener_historial_pagos
 )
+from modelo303_utils import generar_pdf_303, generar_fichero_aeat_303, validar_fichero_aeat
 
 st.set_page_config(page_title="Hondureformas ERP", page_icon="🏗️", layout="wide")
 
@@ -312,8 +313,7 @@ if menu == "🏠 Salpicadero":
     col_f1.metric("Facturas emitidas", num_facturas)
     col_f2.metric("Gastos registrados", num_gastos)
     col_f3.metric("Promedio por factura", money(bv/num_facturas) if num_facturas > 0 else "0.00 €")
-
-# ════════════════════════════════════════════════════════════
+    # ════════════════════════════════════════════════════════════
 # CLIENTES
 # ════════════════════════════════════════════════════════════
 elif menu == "👥 Clientes":
@@ -934,7 +934,7 @@ elif menu == "💰 Ventas":
                         base_linea = cantidad * precio
                         vat_amount = base_linea * vat / 100
                         irpf_amount = base_linea * irpf / 100
-                        total_linea = base_linea + vat_amount + irpf_amount
+                        total_linea = base_linea + vat_amount - irpf_amount  # CORREGIDO: IRPF se resta
                         st.text(f"Total: {money(total_linea)}")
                     descripcion_linea = desc_manual if prod_sel == "-- Manual --" and desc_manual.strip() else (prod_sel if prod_sel != "-- Manual --" else f"Concepto manual {i+1}")
                     prod_id = None
@@ -957,8 +957,8 @@ elif menu == "💰 Ventas":
                 base_total = sum(l["base_amount"] for l in lineas)
                 vat_total = sum(l["vat_amount"] for l in lineas)
                 irpf_total = sum(l["irpf_amount"] for l in lineas)
-                total_factura = base_total + vat_total + irpf_total
-                st.write(f"Base imponible: {money(base_total)} | IVA: {money(vat_total)} | IRPF: {money(irpf_total)} | TOTAL: {money(total_factura)}")
+                total_factura = base_total + vat_total - irpf_total  # CORREGIDO: IRPF se resta
+                st.write(f"Base imponible: {money(base_total)} | IVA: {money(vat_total)} | IRPF: -{money(irpf_total)} | TOTAL: {money(total_factura)}")
                 if st.form_submit_button("Guardar factura") and num:
                     inv_data = {
                         "user_id": user_id,
@@ -1032,7 +1032,7 @@ elif menu == "💰 Ventas":
                         base_linea = cantidad * precio
                         vat_amount = base_linea * vat / 100
                         irpf_amount = base_linea * irpf / 100
-                        total_linea = base_linea + vat_amount + irpf_amount
+                        total_linea = base_linea + vat_amount - irpf_amount  # CORREGIDO: IRPF se resta
                         st.text(f"Total: {money(total_linea)}")
                     lineas.append({
                         "product_id": lin.get("product_id") if i < len(lineas_original) else None,
@@ -1049,8 +1049,8 @@ elif menu == "💰 Ventas":
                 base_total = sum(l["base_amount"] for l in lineas)
                 vat_total = sum(l["vat_amount"] for l in lineas)
                 irpf_total = sum(l["irpf_amount"] for l in lineas)
-                total_factura = base_total + vat_total + irpf_total
-                st.write(f"Base imponible: {money(base_total)} | IVA: {money(vat_total)} | IRPF: {money(irpf_total)} | TOTAL: {money(total_factura)}")
+                total_factura = base_total + vat_total - irpf_total  # CORREGIDO: IRPF se resta
+                st.write(f"Base imponible: {money(base_total)} | IVA: {money(vat_total)} | IRPF: -{money(irpf_total)} | TOTAL: {money(total_factura)}")
                 if st.form_submit_button("Guardar rectificativa") and num:
                     inv_data = {
                         "user_id": user_id,
@@ -1402,8 +1402,14 @@ elif menu == "🛒 Compras":
                 fecha = st.date_input("Fecha", value=pd.to_datetime(datos.get("date", datetime.now())))
                 mes = LISTA_MESES[fecha.month - 1]
                 st.caption(f"📅 Mes: **{mes}**")
-                prov_nombre = st.selectbox("Proveedor", options=proveedores_df["name"].tolist(), index=proveedores_df["name"].tolist().index(datos.get("provider_name", "")))
-                tipo_gasto = st.selectbox("Tipo de gasto", TIPOS_GASTO, index=TIPOS_GASTO.index(datos.get("expense_type", "Otros")))
+                lista_proveedores = proveedores_df["name"].tolist()
+                provider_name = datos.get("provider_name", "")
+                try:
+                    index_prov = lista_proveedores.index(provider_name) if provider_name in lista_proveedores else 0
+                except ValueError:
+                    index_prov = 0
+                prov_nombre = st.selectbox("Proveedor", options=lista_proveedores, index=index_prov)
+                tipo_gasto = st.selectbox("Tipo de gasto", TIPOS_GASTO, index=TIPOS_GASTO.index(datos.get("expense_type", "Otros")) if datos.get("expense_type", "Otros") in TIPOS_GASTO else 0)
                 concepto = st.text_input("Concepto", value=datos.get("category", ""))
                 base = st.number_input("Base imponible", value=float(datos.get("base_amount", 0)), min_value=0.0, step=10.0)
                 vat_pct = st.number_input("% IVA", value=float(datos.get("vat_percentage", 21)), step=1.0)
@@ -1565,7 +1571,7 @@ elif menu == "🔄 Facturación recurrente":
                         "irpf_percentage": r["irpf_percentage"],
                         "vat_amount": r["base_amount"] * r["vat_percentage"] / 100,
                         "irpf_amount": r["base_amount"] * r["irpf_percentage"] / 100,
-                        "total": r["base_amount"] + (r["base_amount"]*r["vat_percentage"]/100) + (r["base_amount"]*r["irpf_percentage"]/100),
+                        "total": r["base_amount"] + (r["base_amount"]*r["vat_percentage"]/100) - (r["base_amount"]*r["irpf_percentage"]/100),
                         "status": "pendiente"
                     }
                     try:
@@ -1586,147 +1592,8 @@ elif menu == "🔄 Facturación recurrente":
             else:
                 st.info("No hay facturas pendientes para hoy")
         except Exception as e:
-            st.error(f"Error al generar facturas recurrentes: {e}")
-
- # ════════════════════════════════════════════════════════════
-# SUSCRIPCIÓN (4 planes: Gratis, Básico, Profesional, Gestoría)
-# ════════════════════════════════════════════════════════════
-elif menu == "💳 Suscripción":
-    st.title("💳 Planes de Suscripción")
-    
-    # Verificación segura de user_id
-    if not user_id:
-        st.error("No se pudo obtener tu ID de usuario. Inicia sesión de nuevo.")
-        st.stop()
-    
-    # Obtener suscripción actual de forma segura
-    try:
-        suscripcion = obtener_suscripcion_usuario(user_id)
-        plan_actual = suscripcion.get("plan", "free") if suscripcion else "free"
-    except Exception:
-        plan_actual = "free"
-    
-    iconos_plan = {
-        "free": "🆓 Gratis",
-        "basico": "💼 Básico",
-        "profesional": "⭐ Profesional",
-        "gestoria": "🏢 Gestoría"
-    }
-    
-    st.markdown(f"### Tu plan actual: **{iconos_plan.get(plan_actual, plan_actual)}**")
-    
-    # Mostrar historial de pagos si existe
-    try:
-        pagos = obtener_historial_pagos(user_id)
-        if pagos:
-            st.markdown("---")
-            st.subheader("📜 Historial de pagos")
-            pagos_df = pd.DataFrame(pagos)
-            if not pagos_df.empty:
-                pagos_df["Fecha"] = pd.to_datetime(pagos_df["created_at"]).dt.strftime("%d/%m/%Y")
-                pagos_df["Importe"] = pagos_df["amount"].apply(lambda x: f"{float(x):,.2f} €")
-                pagos_df["Plan"] = pagos_df["plan"]
-                pagos_df["Estado"] = pagos_df["status"]
-                st.dataframe(pagos_df[["Fecha", "Importe", "Plan", "Estado"]], hide_index=True, use_container_width=True)
-    except Exception:
-        pass
-    
-    st.markdown("---")
-    st.markdown("### Planes disponibles")
-    
-    # ============ 4 COLUMNAS ============
-    col1, col2, col3, col4 = st.columns(4)
-    
-    # ──────────── COLUMNA 1: GRATIS ────────────
-    with col1:
-        st.markdown("### 🆓 Gratis")
-        st.markdown("**0 €/mes**")
-        st.markdown("---")
-        st.markdown("✔️ 3 facturas/mes")
-        st.markdown("✔️ PDF básico sin QR")
-        st.markdown("✔️ Clientes y productos")
-        st.markdown("❌ Sin firma electrónica")
-        st.markdown("❌ Sin Veri*Factu")
-        st.markdown("❌ Sin XML FacturaE")
-        st.markdown("---")
-        if plan_actual == "free":
-            st.success("✅ Plan actual")
-        else:
-            if st.button("⬇️ Cambiar a Gratis", key="btn_free", use_container_width=True):
-                if cancelar_suscripcion(user_id):
-                    st.success("Suscripción cancelada. Plan cambiado a Gratis.")
-                    time.sleep(1)
-                    st.rerun()
-    
-    # ──────────── COLUMNA 2: BÁSICO ────────────
-    with col2:
-        st.markdown("### 💼 Básico")
-        st.markdown("**15 €/mes**")
-        st.markdown("---")
-        st.markdown("✔️ Facturas ilimitadas")
-        st.markdown("✔️ PDF con QR Veri*Factu")
-        st.markdown("✔️ Envío por email")
-        st.markdown("✔️ Clientes y productos")
-        st.markdown("✔️ Presupuestos")
-        st.markdown("❌ Sin firma XAdES-T")
-        st.markdown("❌ Sin XML FacturaE")
-        st.markdown("---")
-        if plan_actual == "basico":
-            st.success("✅ Plan actual")
-        else:
-            if st.button("🚀 Contratar Básico", key="btn_basico", use_container_width=True):
-                url = crear_checkout_session(user_id, st.session_state.user.email, "basico")
-                if url:
-                    st.markdown(f"[🔗 Ir a la página de pago]({url})")
-                    st.info("Serás redirigido a Stripe para completar el pago.")
-    
-    # ──────────── COLUMNA 3: PROFESIONAL ────────────
-    with col3:
-        st.markdown("### ⭐ Profesional")
-        st.markdown("**30 €/mes**")
-        st.markdown("---")
-        st.markdown("✔️ Todo lo del plan Básico")
-        st.markdown("✔️ **Veri*Factu completo**")
-        st.markdown("✔️ **FacturaE XML firmado XAdES-T**")
-        st.markdown("✔️ Hash encadenado SHA-256")
-        st.markdown("✔️ QR verificable AEAT")
-        st.markdown("✔️ Contabilidad")
-        st.markdown("✔️ Modelo 303")
-        st.markdown("---")
-        if plan_actual == "profesional":
-            st.success("✅ Plan actual")
-        else:
-            if st.button("🌟 Contratar Profesional", key="btn_profesional", use_container_width=True):
-                url = crear_checkout_session(user_id, st.session_state.user.email, "profesional")
-                if url:
-                    st.markdown(f"[🔗 Ir a la página de pago]({url})")
-                    st.info("Serás redirigido a Stripe para completar el pago.")
-    
-    # ──────────── COLUMNA 4: GESTORÍA ────────────
-    with col4:
-        st.markdown("### 🏢 Gestoría")
-        st.markdown("**60 €/mes**")
-        st.markdown("---")
-        st.markdown("✔️ Todo lo del plan Profesional")
-        st.markdown("✔️ **Multi-usuario**")
-        st.markdown("✔️ **API REST**")
-        st.markdown("✔️ Soporte prioritario")
-        st.markdown("✔️ Informes avanzados")
-        st.markdown("✔️ Exportación a Excel")
-        st.markdown("✔️ Personalización completa")
-        st.markdown("---")
-        if plan_actual == "gestoria":
-            st.success("✅ Plan actual")
-        else:
-            if st.button("🏢 Contratar Gestoría", key="btn_gestoria", use_container_width=True):
-                url = crear_checkout_session(user_id, st.session_state.user.email, "gestoria")
-                if url:
-                    st.markdown(f"[🔗 Ir a la página de pago]({url})")
-                    st.info("Serás redirigido a Stripe para completar el pago.")
-    
-    st.markdown("---")
-    st.caption("Los pagos se procesan de forma segura a través de Stripe. Puedes cancelar en cualquier momento.")
-    # ════════════════════════════════════════════════════════════
+            st.error(f"error al generar facturas recurrentes: {e}")
+            # ════════════════════════════════════════════════════════════
 # LIBRO CONTABLE GENERAL
 # ════════════════════════════════════════════════════════════
 elif menu == "📖 Libro Contable General":
@@ -1772,13 +1639,21 @@ elif menu == "📒 Contabilidad":
             st.info("Aún no hay asientos contables.")
     elif submenu == "Mayor":
         try:
-            cuentas = supabase.table("journal_entry_lines").select("account").eq("user_id", user_id).execute()
-            cuentas_df = pd.DataFrame(cuentas.data) if cuentas.data else pd.DataFrame()
+            # Obtener los journal_entries del usuario
+            entries_user = supabase.table("journal_entries").select("id").eq("user_id", user_id).execute()
+            entry_ids = [e["id"] for e in entries_user.data] if entries_user.data else []
+            
+            if entry_ids:
+                cuentas = supabase.table("journal_entry_lines").select("account").in_("journal_entry_id", entry_ids).execute()
+                cuentas_df = pd.DataFrame(cuentas.data) if cuentas.data else pd.DataFrame()
+            else:
+                cuentas_df = pd.DataFrame()
+            
             if not cuentas_df.empty:
                 cuenta_sel = st.selectbox("Selecciona cuenta", cuentas_df["account"].unique())
                 movs = supabase.table("journal_entry_lines")\
                     .select("*, journal_entries(date)")\
-                    .eq("user_id", user_id)\
+                    .in_("journal_entry_id", entry_ids)\
                     .eq("account", cuenta_sel)\
                     .execute()
                 movs_df = pd.DataFrame(movs.data) if movs.data else pd.DataFrame()
@@ -1852,8 +1727,14 @@ elif menu == "🏛️ Impuestos Trimestrales":
     elif mes_actual <= 6: trimestre_actual = "2T (Abr-Jun)"
     elif mes_actual <= 9: trimestre_actual = "3T (Jul-Sep)"
     else: trimestre_actual = "4T (Oct-Dic)"
-    anio = st.selectbox("Año", [2025,2026,2027,2028,2029,2030], index=[2025,2026,2027,2028,2029,2030].index(anio_actual) if anio_actual in [2025,2026,2027,2028,2029,2030] else 0)
-    trimestre = st.selectbox("Trimestre", ["1T (Ene-Mar)","2T (Abr-Jun)","3T (Jul-Sep)","4T (Oct-Dic)"], index=["1T (Ene-Mar)","2T (Abr-Jun)","3T (Jul-Sep)","4T (Oct-Dic)"].index(trimestre_actual))
+    
+    # Años dinámicos
+    anios_disponibles = list(range(anio_actual - 5, anio_actual + 6))
+    anio = st.selectbox("Año", anios_disponibles, index=5)
+    
+    trimestres = ["1T (Ene-Mar)","2T (Abr-Jun)","3T (Jul-Sep)","4T (Oct-Dic)"]
+    trimestre = st.selectbox("Trimestre", trimestres, index=trimestres.index(trimestre_actual))
+    
     meses_trim = {
         "1T (Ene-Mar)": ["Enero","Febrero","Marzo"],
         "2T (Abr-Jun)": ["Abril","Mayo","Junio"],
@@ -1919,87 +1800,58 @@ elif menu == "🏛️ Impuestos Trimestrales":
         
         with col_desc1:
             st.markdown("**📄 Borrador PDF (Para tu consulta)**")
-            from weasyprint import HTML
-            
-            meses_str = {
-                "1T (Ene-Mar)": "Enero - Febrero - Marzo",
-                "2T (Abr-Jun)": "Abril - Mayo - Junio",
-                "3T (Jul-Sep)": "Julio - Agosto - Septiembre",
-                "4T (Oct-Dic)": "Octubre - Noviembre - Diciembre"
-            }.get(trimestre, trimestre)
-            
-            resultado = iva_repercutido - iva_soportado
-            if resultado > 0:
-                resultado_texto = f"A INGRESAR: {resultado:,.2f} €"
-                casilla = "Casilla 69"
-            elif resultado < 0:
-                resultado_texto = f"A COMPENSAR: {abs(resultado):,.2f} €"
-                casilla = "Casilla 71"
-            else:
-                resultado_texto = "SIN RESULTADO (0,00 €)"
-                casilla = "Casilla 69/71"
-            
-            html_pdf = f"""
-            <!DOCTYPE html><html><head><meta charset="utf-8"><style>
-            body {{ font-family: Arial; margin: 1.5cm; font-size: 11px; }}
-            .header {{ border-bottom: 3px solid #1e3a8a; padding-bottom: 15px; margin-bottom: 25px; }}
-            .header h1 {{ color: #1e3a8a; font-size: 22px; }}
-            h2 {{ color: #1e3a8a; font-size: 16px; margin: 20px 0 10px 0; }}
-            table {{ width: 100%; border-collapse: collapse; margin: 10px 0; }}
-            th {{ background-color: #1e3a8a; color: white; padding: 8px; text-align: left; }}
-            td {{ padding: 8px; border-bottom: 1px solid #e2e8f0; }}
-            .amount {{ text-align: right; }}
-            .resultado {{ background-color: #ebf4ff; border: 2px solid #1e3a8a; border-radius: 8px; padding: 15px; margin: 20px 0; text-align: center; }}
-            .resultado .importe {{ font-size: 24px; font-weight: bold; color: #1e3a8a; }}
-            .aviso {{ background-color: #fff3cd; border: 1px solid #ffc107; padding: 10px; margin: 15px 0; font-size: 10px; }}
-            </style></head><body>
-            <div class="header"><h1>MODELO 303 - IVA</h1><p><strong>Período:</strong> {trimestre} {anio}<br><strong>Meses:</strong> {meses_str}</p></div>
-            <div class="aviso">⚠️ <strong>BORRADOR INFORMATIVO</strong> - No tiene validez oficial ante la AEAT</div>
-            <h2>1. IVA DEVENGADO (Ventas)</h2>
-            <table><tr><th>Concepto</th><th>Base Imponible</th><th>Cuota Repercutida</th></tr>
-            <tr><td>Régimen general</td><td class="amount">{base_ventas:,.2f} €</td><td class="amount">{iva_repercutido:,.2f} €</td></tr></table>
-            <h2>2. IVA DEDUCIBLE (Compras)</h2>
-            <table><tr><th>Concepto</th><th>Base Imponible</th><th>Cuota Soportada</th></tr>
-            <tr><td>Adquisiciones corrientes</td><td class="amount">{base_compras:,.2f} €</td><td class="amount">{iva_soportado:,.2f} €</td></tr></table>
-            <h2>3. RESULTADO</h2>
-            <div class="resultado"><div>{casilla}</div><div class="importe">{resultado_texto}</div></div>
-            <h2>4. INFORMACIÓN ADICIONAL</h2>
-            <table><tr><th>Concepto</th><th>Importe</th></tr>
-            <tr><td>IRPF Retenciones</td><td class="amount">{irpf_retenido:,.2f} €</td></tr>
-            <tr><td>Beneficio neto</td><td class="amount">{beneficio_neto:,.2f} €</td></tr>
-            <tr><td>Pago fraccionado (20%)</td><td class="amount">{pago_fraccionado:,.2f} €</td></tr></table>
-            </body></html>
-            """
-            
             try:
-                pdf_bytes_303 = HTML(string=html_pdf).write_pdf()
-                st.download_button("⬇️ Descargar PDF resumen", pdf_bytes_303, f"Modelo_303_{anio}_{trimestre.replace(' ','')}.pdf", mime="application/pdf", key="descargar_pdf_303")
+                pdf_bytes_303 = generar_pdf_303(
+                    anio, trimestre, base_ventas, iva_repercutido,
+                    base_compras, iva_soportado, irpf_retenido,
+                    beneficio_neto, pago_fraccionado, iva_ingresar
+                )
+                if pdf_bytes_303:
+                    st.download_button(
+                        "⬇️ Descargar PDF resumen",
+                        pdf_bytes_303,
+                        f"Modelo_303_{anio}_{trimestre.replace(' ','')}.pdf",
+                        mime="application/pdf",
+                        key="descargar_pdf_303"
+                    )
             except Exception as e:
                 st.error(f"Error al generar PDF: {e}")
         
         with col_desc2:
             st.markdown("**💻 Fichero AEAT (Importación)**")
-            def fmt_importe(valor):
-                centimos = int(round(valor * 100))
-                return f"{centimos:015d}"
-            nif_limpio = nif_emisor.strip().upper().replace(" ", "")[:9].ljust(9)
-            nombre_limpio = nombre_emisor.strip()[:29].ljust(29)
-            periodo_cod = {"1T (Ene-Mar)": "01", "2T (Abr-Jun)": "02", "3T (Jul-Sep)": "03", "4T (Oct-Dic)": "04"}.get(trimestre, "01")
-            registro = ("01" + nif_limpio + nombre_limpio + str(anio) + " " + periodo_cod + "   " +
-                       fmt_importe(base_ventas) + fmt_importe(iva_repercutido) +
-                       fmt_importe(base_compras) + fmt_importe(iva_soportado) +
-                       fmt_importe(iva_ingresar))
-            registro_fin = "99" + " " * 98
-            fichero_completo = registro + "\r\n" + registro_fin
-            st.download_button("⬇️ Descargar fichero AEAT", fichero_completo.encode('utf-8'), f"303_{anio}_{trimestre.replace(' ','')}.txt", mime="text/plain", key="descargar_fichero_303")
-            st.warning("⚠️ Verifica el formato con el diseño oficial de la AEAT antes de importar.")
+            try:
+                fichero_completo = generar_fichero_aeat_303(
+                    anio, trimestre,
+                    base_ventas, iva_repercutido,
+                    base_compras, iva_soportado,
+                    nif_emisor, nombre_emisor
+                )
+                
+                st.download_button(
+                    "⬇️ Descargar fichero AEAT",
+                    fichero_completo.encode('utf-8'),
+                    f"303_{anio}_{trimestre.replace(' ','')}.txt",
+                    mime="text/plain",
+                    key="descargar_fichero_303"
+                )
+                
+                # Validar el fichero generado
+                es_valido, mensaje = validar_fichero_aeat(fichero_completo)
+                if es_valido:
+                    st.success(mensaje)
+                else:
+                    st.warning(mensaje)
+                
+                st.warning("⚠️ Verifica el formato con el diseño oficial de la AEAT antes de importar.")
+            except Exception as e:
+                st.error(f"Error al generar fichero AEAT: {e}")
 
 # ════════════════════════════════════════════════════════════
 # CONCILIACIÓN BANCARIA
 # ════════════════════════════════════════════════════════════
 elif menu == "🏦 Conciliación Bancaria":
     st.title("Conciliación Bancaria")
-    tab1, tab2 = st.tabs(["Cargar CSV", "GoCardless (Sandbox)"])
+    tab1, tab2 = st.tabs(["Cargar CSV", "GoCardless"])
     with tab1:
         st.subheader("Cargar extracto bancario (CSV)")
         archivo_csv = st.file_uploader("Selecciona archivo CSV", type="csv")
@@ -2024,32 +1876,62 @@ elif menu == "🏦 Conciliación Bancaria":
             except Exception as e:
                 st.error(f"Error al leer CSV: {e}")
     with tab2:
-        st.subheader("Importar desde GoCardless (Sandbox)")
-        if "gocardless_step" not in st.session_state:
-            st.session_state.gocardless_step = "idle"
-        if st.session_state.gocardless_step == "idle":
-            if st.button("🔌 Iniciar conexión con GoCardless"):
-                exito, link, req_id = iniciar_conexion_gocardless()
-                if exito:
-                    st.session_state.gocardless_step = "waiting_auth"
-                    st.rerun()
-                else:
-                    st.error(link)
-        elif st.session_state.gocardless_step == "waiting_auth":
-            link = st.session_state.get("gocardless_link", "#")
-            st.info(f"🔗 [Abrir enlace de autorización]({link}) (sandbox)")
-            if st.button("✅ He autorizado la cuenta (continuar)"):
-                exito, mensaje, df = completar_importacion(user_id, supabase)
-                if exito:
-                    st.success(mensaje)
-                    if df is not None and not df.empty:
-                        st.dataframe(df.head(10))
+        st.subheader("Importar desde GoCardless")
+        
+        # Obtener token para listar bancos
+        token_bancos = obtener_token_gocardless()
+        
+        if token_bancos:
+            # Intentar obtener bancos disponibles
+            try:
+                bancos = obtener_bancos_disponibles(token_bancos, "ES")
+            except Exception:
+                bancos = []
+            
+            if bancos:
+                # Selector de banco
+                banco_dict = {b.get("name", "Desconocido"): b.get("id", "") for b in bancos}
+                banco_seleccionado = st.selectbox(
+                    "🏦 Selecciona tu banco",
+                    options=list(banco_dict.keys())
+                )
+                
+                if "gocardless_step" not in st.session_state:
                     st.session_state.gocardless_step = "idle"
-                    get_bank_transactions.clear()
-                else:
-                    st.error(mensaje)
-                    st.session_state.gocardless_step = "idle"
-                st.rerun()
+                
+                if st.session_state.gocardless_step == "idle":
+                    if st.button("🔌 Conectar con banco"):
+                        institution_id = banco_dict[banco_seleccionado]
+                        exito, link, req_id = iniciar_conexion_gocardless(institution_id)
+                        if exito:
+                            st.session_state.gocardless_link = link
+                            st.session_state.gocardless_req_id = req_id
+                            st.session_state.gocardless_step = "waiting_auth"
+                            st.rerun()
+                        else:
+                            st.error(link)
+                
+                elif st.session_state.gocardless_step == "waiting_auth":
+                    link = st.session_state.get("gocardless_link", "#")
+                    st.info(f"🔗 [Abrir enlace de autorización]({link})")
+                    
+                    if st.button("✅ He autorizado la cuenta (continuar)"):
+                        exito, mensaje, df = completar_importacion(user_id, supabase)
+                        if exito:
+                            st.success(mensaje)
+                            if df is not None and not df.empty:
+                                st.dataframe(df.head(10))
+                            st.session_state.gocardless_step = "idle"
+                            get_bank_transactions.clear()
+                        else:
+                            st.error(mensaje)
+                            st.session_state.gocardless_step = "idle"
+                        st.rerun()
+            else:
+                st.info("No se pudieron cargar los bancos disponibles. Verifica tus credenciales de GoCardless.")
+        else:
+            st.error("No se pudo autenticar con GoCardless. Verifica tus credenciales en secrets.toml.")
+    
     st.subheader("Movimientos sin conciliar")
     transacciones = get_bank_transactions(user_id)
     if not transacciones.empty:
@@ -2277,7 +2159,7 @@ elif menu == "📝 Presupuestos":
                 base_linea = cantidad * precio
                 vat_amount = base_linea * vat / 100
                 irpf_amount = base_linea * irpf / 100
-                total_linea = base_linea + vat_amount + irpf_amount
+                total_linea = base_linea + vat_amount - irpf_amount  # CORREGIDO: IRPF se resta
                 st.text(f"Total: {money(total_linea)}")
             descripcion_linea = f"{prod_sel}\n{desc_manual.strip()}" if prod_sel != "-- Manual --" and desc_manual.strip() else (desc_manual.strip() if desc_manual.strip() else prod_sel)
             lineas.append({"description": descripcion_linea, "quantity": cantidad, "unit_price": precio, "base_amount": base_linea, "vat_percentage": vat, "vat_amount": vat_amount, "irpf_percentage": irpf, "irpf_amount": irpf_amount, "total": total_linea})
@@ -2286,7 +2168,7 @@ elif menu == "📝 Presupuestos":
             base_total = sum(l["base_amount"] for l in lineas)
             vat_total = sum(l["vat_amount"] for l in lineas)
             irpf_total = sum(l["irpf_amount"] for l in lineas)
-            total = base_total + vat_total + irpf_total
+            total = base_total + vat_total - irpf_total  # CORREGIDO: IRPF se resta
         else:
             base_total = vat_total = irpf_total = total = 0.0
 
@@ -2439,6 +2321,137 @@ elif menu == "👥 Colaboradores":
     st.info("Funcionalidad en desarrollo.")
 
 # ════════════════════════════════════════════════════════════
+# SUSCRIPCIÓN
+# ════════════════════════════════════════════════════════════
+elif menu == "💳 Suscripción":
+    st.title("💳 Planes de Suscripción")
+    
+    if not user_id:
+        st.error("No se pudo obtener tu ID de usuario. Inicia sesión de nuevo.")
+        st.stop()
+    
+    try:
+        suscripcion = obtener_suscripcion_usuario(user_id)
+        plan_actual = suscripcion.get("plan", "free") if suscripcion else "free"
+    except Exception:
+        plan_actual = "free"
+    
+    iconos_plan = {
+        "free": "🆓 Gratis",
+        "basico": "💼 Básico",
+        "profesional": "⭐ Profesional",
+        "gestoria": "🏢 Gestoría"
+    }
+    
+    st.markdown(f"### Tu plan actual: **{iconos_plan.get(plan_actual, plan_actual)}**")
+    
+    try:
+        pagos = obtener_historial_pagos(user_id)
+        if pagos:
+            st.markdown("---")
+            st.subheader("📜 Historial de pagos")
+            pagos_df = pd.DataFrame(pagos)
+            if not pagos_df.empty:
+                pagos_df["Fecha"] = pd.to_datetime(pagos_df["created_at"]).dt.strftime("%d/%m/%Y")
+                pagos_df["Importe"] = pagos_df["amount"].apply(lambda x: f"{float(x):,.2f} €")
+                pagos_df["Plan"] = pagos_df["plan"]
+                pagos_df["Estado"] = pagos_df["status"]
+                st.dataframe(pagos_df[["Fecha", "Importe", "Plan", "Estado"]], hide_index=True, use_container_width=True)
+    except Exception:
+        pass
+    
+    st.markdown("---")
+    st.markdown("### Planes disponibles")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.markdown("### 🆓 Gratis")
+        st.markdown("**0 €/mes**")
+        st.markdown("---")
+        st.markdown("✔️ 3 facturas/mes")
+        st.markdown("✔️ PDF básico sin QR")
+        st.markdown("✔️ Clientes y productos")
+        st.markdown("❌ Sin firma electrónica")
+        st.markdown("❌ Sin Veri*Factu")
+        st.markdown("❌ Sin XML FacturaE")
+        st.markdown("---")
+        if plan_actual == "free":
+            st.success("✅ Plan actual")
+        else:
+            if st.button("⬇️ Cambiar a Gratis", key="btn_free", use_container_width=True):
+                if cancelar_suscripcion(user_id):
+                    st.success("Suscripción cancelada. Plan cambiado a Gratis.")
+                    time.sleep(1)
+                    st.rerun()
+    
+    with col2:
+        st.markdown("### 💼 Básico")
+        st.markdown("**15 €/mes**")
+        st.markdown("---")
+        st.markdown("✔️ Facturas ilimitadas")
+        st.markdown("✔️ PDF con QR Veri*Factu")
+        st.markdown("✔️ Envío por email")
+        st.markdown("✔️ Clientes y productos")
+        st.markdown("✔️ Presupuestos")
+        st.markdown("❌ Sin firma XAdES-T")
+        st.markdown("❌ Sin XML FacturaE")
+        st.markdown("---")
+        if plan_actual == "basico":
+            st.success("✅ Plan actual")
+        else:
+            if st.button("🚀 Contratar Básico", key="btn_basico", use_container_width=True):
+                url = crear_checkout_session(user_id, st.session_state.user.email, "basico")
+                if url:
+                    st.markdown(f"[🔗 Ir a la página de pago]({url})")
+                    st.info("Serás redirigido a Stripe para completar el pago.")
+    
+    with col3:
+        st.markdown("### ⭐ Profesional")
+        st.markdown("**30 €/mes**")
+        st.markdown("---")
+        st.markdown("✔️ Todo lo del plan Básico")
+        st.markdown("✔️ **Veri*Factu completo**")
+        st.markdown("✔️ **FacturaE XML firmado XAdES-T**")
+        st.markdown("✔️ Hash encadenado SHA-256")
+        st.markdown("✔️ QR verificable AEAT")
+        st.markdown("✔️ Contabilidad")
+        st.markdown("✔️ Modelo 303")
+        st.markdown("---")
+        if plan_actual == "profesional":
+            st.success("✅ Plan actual")
+        else:
+            if st.button("🌟 Contratar Profesional", key="btn_profesional", use_container_width=True):
+                url = crear_checkout_session(user_id, st.session_state.user.email, "profesional")
+                if url:
+                    st.markdown(f"[🔗 Ir a la página de pago]({url})")
+                    st.info("Serás redirigido a Stripe para completar el pago.")
+    
+    with col4:
+        st.markdown("### 🏢 Gestoría")
+        st.markdown("**60 €/mes**")
+        st.markdown("---")
+        st.markdown("✔️ Todo lo del plan Profesional")
+        st.markdown("✔️ **Multi-usuario**")
+        st.markdown("✔️ **API REST**")
+        st.markdown("✔️ Soporte prioritario")
+        st.markdown("✔️ Informes avanzados")
+        st.markdown("✔️ Exportación a Excel")
+        st.markdown("✔️ Personalización completa")
+        st.markdown("---")
+        if plan_actual == "gestoria":
+            st.success("✅ Plan actual")
+        else:
+            if st.button("🏢 Contratar Gestoría", key="btn_gestoria", use_container_width=True):
+                url = crear_checkout_session(user_id, st.session_state.user.email, "gestoria")
+                if url:
+                    st.markdown(f"[🔗 Ir a la página de pago]({url})")
+                    st.info("Serás redirigido a Stripe para completar el pago.")
+    
+    st.markdown("---")
+    st.caption("Los pagos se procesan de forma segura a través de Stripe. Puedes cancelar en cualquier momento.")
+
+# ════════════════════════════════════════════════════════════
 # CONFIGURACIÓN (con gestión de certificado digital)
 # ════════════════════════════════════════════════════════════
 elif menu == "⚙️ Configuración":
@@ -2550,3 +2563,5 @@ elif menu == "⚙️ Configuración":
         pdf_bytes = make_invoice_pdf_from_template(ejemplo_invoice, ejemplo_client, ejemplo_company, ejemplo_lineas)
         if pdf_bytes:
             st.download_button("Descargar factura de prueba", pdf_bytes, "prueba_factura.pdf", "application/pdf")
+
+    
