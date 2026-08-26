@@ -1588,8 +1588,8 @@ elif menu == "🔄 Facturación recurrente":
         except Exception as e:
             st.error(f"Error al generar facturas recurrentes: {e}")
 
-# ════════════════════════════════════════════════════════════
-# SUSCRIPCIÓN
+ # ════════════════════════════════════════════════════════════
+# SUSCRIPCIÓN (4 planes: Gratis, Básico, Profesional, Gestoría)
 # ════════════════════════════════════════════════════════════
 elif menu == "💳 Suscripción":
     st.title("💳 Planes de Suscripción")
@@ -1599,82 +1599,130 @@ elif menu == "💳 Suscripción":
         st.error("No se pudo obtener tu ID de usuario. Inicia sesión de nuevo.")
         st.stop()
     
-    suscripcion = obtener_suscripcion_usuario(user_id)
-    plan_actual = suscripcion.get("plan", "free") if suscripcion else "free"
+    # Obtener suscripción actual de forma segura
+    try:
+        suscripcion = obtener_suscripcion_usuario(user_id)
+        plan_actual = suscripcion.get("plan", "free") if suscripcion else "free"
+    except Exception:
+        plan_actual = "free"
     
-    iconos_plan = {"free": "🆓 Gratis", "basico": "💼 Básico", "profesional": "⭐ Profesional", "gestoria": "🏢 Gestoría"}
+    iconos_plan = {
+        "free": "🆓 Gratis",
+        "basico": "💼 Básico",
+        "profesional": "⭐ Profesional",
+        "gestoria": "🏢 Gestoría"
+    }
     
     st.markdown(f"### Tu plan actual: **{iconos_plan.get(plan_actual, plan_actual)}**")
     
     # Mostrar historial de pagos si existe
-    pagos = obtener_historial_pagos(user_id)
-    if pagos:
-        st.markdown("---")
-        st.subheader("📜 Historial de pagos")
-        pagos_df = pd.DataFrame(pagos)
-        if not pagos_df.empty:
-            pagos_df["Fecha"] = pd.to_datetime(pagos_df["created_at"]).dt.strftime("%d/%m/%Y")
-            pagos_df["Importe"] = pagos_df["amount"].apply(lambda x: f"{float(x):,.2f} €")
-            pagos_df["Plan"] = pagos_df["plan"]
-            pagos_df["Estado"] = pagos_df["status"]
-            st.dataframe(pagos_df[["Fecha", "Importe", "Plan", "Estado"]], hide_index=True, use_container_width=True)
+    try:
+        pagos = obtener_historial_pagos(user_id)
+        if pagos:
+            st.markdown("---")
+            st.subheader("📜 Historial de pagos")
+            pagos_df = pd.DataFrame(pagos)
+            if not pagos_df.empty:
+                pagos_df["Fecha"] = pd.to_datetime(pagos_df["created_at"]).dt.strftime("%d/%m/%Y")
+                pagos_df["Importe"] = pagos_df["amount"].apply(lambda x: f"{float(x):,.2f} €")
+                pagos_df["Plan"] = pagos_df["plan"]
+                pagos_df["Estado"] = pagos_df["status"]
+                st.dataframe(pagos_df[["Fecha", "Importe", "Plan", "Estado"]], hide_index=True, use_container_width=True)
+    except Exception:
+        pass
     
     st.markdown("---")
     st.markdown("### Planes disponibles")
     
-    col1, col2, col3 = st.columns(3)
+    # ============ 4 COLUMNAS ============
+    col1, col2, col3, col4 = st.columns(4)
     
+    # ──────────── COLUMNA 1: GRATIS ────────────
     with col1:
         st.markdown("### 🆓 Gratis")
-        st.markdown("**0€/mes**")
-        st.markdown("- 3 facturas/mes")
-        st.markdown("- PDF básico")
-        st.markdown("- Sin firma electrónica")
-        st.markdown("- Sin Veri*Factu")
-        if plan_actual != "free":
-            if st.button("⬇️ Cambiar a Gratis", key="btn_free"):
+        st.markdown("**0 €/mes**")
+        st.markdown("---")
+        st.markdown("✔️ 3 facturas/mes")
+        st.markdown("✔️ PDF básico sin QR")
+        st.markdown("✔️ Clientes y productos")
+        st.markdown("❌ Sin firma electrónica")
+        st.markdown("❌ Sin Veri*Factu")
+        st.markdown("❌ Sin XML FacturaE")
+        st.markdown("---")
+        if plan_actual == "free":
+            st.success("✅ Plan actual")
+        else:
+            if st.button("⬇️ Cambiar a Gratis", key="btn_free", use_container_width=True):
                 if cancelar_suscripcion(user_id):
                     st.success("Suscripción cancelada. Plan cambiado a Gratis.")
                     time.sleep(1)
                     st.rerun()
-        else:
-            st.success("✅ Plan actual")
     
+    # ──────────── COLUMNA 2: BÁSICO ────────────
     with col2:
         st.markdown("### 💼 Básico")
-        st.markdown("**15€/mes**")
-        st.markdown("- Facturas ilimitadas")
-        st.markdown("- PDF con QR")
-        st.markdown("- Envío por email")
-        st.markdown("- Clientes y productos")
-        st.markdown("- Presupuestos")
-        if plan_actual != "basico":
-            if st.button("🚀 Contratar Básico", key="btn_basico"):
+        st.markdown("**15 €/mes**")
+        st.markdown("---")
+        st.markdown("✔️ Facturas ilimitadas")
+        st.markdown("✔️ PDF con QR Veri*Factu")
+        st.markdown("✔️ Envío por email")
+        st.markdown("✔️ Clientes y productos")
+        st.markdown("✔️ Presupuestos")
+        st.markdown("❌ Sin firma XAdES-T")
+        st.markdown("❌ Sin XML FacturaE")
+        st.markdown("---")
+        if plan_actual == "basico":
+            st.success("✅ Plan actual")
+        else:
+            if st.button("🚀 Contratar Básico", key="btn_basico", use_container_width=True):
                 url = crear_checkout_session(user_id, st.session_state.user.email, "basico")
                 if url:
                     st.markdown(f"[🔗 Ir a la página de pago]({url})")
                     st.info("Serás redirigido a Stripe para completar el pago.")
-        else:
-            st.success("✅ Plan actual")
     
+    # ──────────── COLUMNA 3: PROFESIONAL ────────────
     with col3:
         st.markdown("### ⭐ Profesional")
-        st.markdown("**25€/mes**")
-        st.markdown("- Todo lo del plan Básico")
-        st.markdown("- **Veri*Factu completo**")
-        st.markdown("- **FacturaE XML firmado XAdES-T**")
-        st.markdown("- Hash encadenado SHA-256")
-        st.markdown("- QR verificable AEAT")
-        st.markdown("- Contabilidad")
-        st.markdown("- Modelo 303")
-        if plan_actual != "profesional":
-            if st.button("🌟 Contratar Profesional", key="btn_profesional"):
+        st.markdown("**30 €/mes**")
+        st.markdown("---")
+        st.markdown("✔️ Todo lo del plan Básico")
+        st.markdown("✔️ **Veri*Factu completo**")
+        st.markdown("✔️ **FacturaE XML firmado XAdES-T**")
+        st.markdown("✔️ Hash encadenado SHA-256")
+        st.markdown("✔️ QR verificable AEAT")
+        st.markdown("✔️ Contabilidad")
+        st.markdown("✔️ Modelo 303")
+        st.markdown("---")
+        if plan_actual == "profesional":
+            st.success("✅ Plan actual")
+        else:
+            if st.button("🌟 Contratar Profesional", key="btn_profesional", use_container_width=True):
                 url = crear_checkout_session(user_id, st.session_state.user.email, "profesional")
                 if url:
                     st.markdown(f"[🔗 Ir a la página de pago]({url})")
                     st.info("Serás redirigido a Stripe para completar el pago.")
-        else:
+    
+    # ──────────── COLUMNA 4: GESTORÍA ────────────
+    with col4:
+        st.markdown("### 🏢 Gestoría")
+        st.markdown("**60 €/mes**")
+        st.markdown("---")
+        st.markdown("✔️ Todo lo del plan Profesional")
+        st.markdown("✔️ **Multi-usuario**")
+        st.markdown("✔️ **API REST**")
+        st.markdown("✔️ Soporte prioritario")
+        st.markdown("✔️ Informes avanzados")
+        st.markdown("✔️ Exportación a Excel")
+        st.markdown("✔️ Personalización completa")
+        st.markdown("---")
+        if plan_actual == "gestoria":
             st.success("✅ Plan actual")
+        else:
+            if st.button("🏢 Contratar Gestoría", key="btn_gestoria", use_container_width=True):
+                url = crear_checkout_session(user_id, st.session_state.user.email, "gestoria")
+                if url:
+                    st.markdown(f"[🔗 Ir a la página de pago]({url})")
+                    st.info("Serás redirigido a Stripe para completar el pago.")
     
     st.markdown("---")
     st.caption("Los pagos se procesan de forma segura a través de Stripe. Puedes cancelar en cualquier momento.")
