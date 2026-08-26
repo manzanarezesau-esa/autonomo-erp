@@ -37,6 +37,7 @@ from stripe_utils import (
     obtener_historial_pagos
 )
 from modelo303_utils import generar_pdf_303, generar_fichero_aeat_303, validar_fichero_aeat
+from facturae_utils import generar_facturae_xml
 
 st.set_page_config(page_title="Hondureformas ERP", page_icon="🏗️", layout="wide")
 
@@ -143,7 +144,7 @@ if st.session_state.user is None:
     st.stop()
 
 # ------------------------------------------------------------
-# BARRA LATERAL (con user_id seguro)
+# BARRA LATERAL
 # ------------------------------------------------------------
 logo_url = None
 try:
@@ -171,7 +172,6 @@ with st.sidebar:
     st.markdown("---")
     st.write(f"👤 {st.session_state.user.email}")
     
-    # Mostrar plan actual de forma segura
     user_id_actual = st.session_state.get("user_id")
     
     if user_id_actual:
@@ -214,10 +214,8 @@ menu = st.sidebar.radio("Navegación", [
     "⚙️ Configuración"
 ])
 
-# Definir user_id de forma segura
 user_id = st.session_state.get("user_id")
 
-# Si no existe, intentar obtenerlo de la sesión
 if not user_id:
     try:
         session = supabase.auth.get_session()
@@ -227,7 +225,6 @@ if not user_id:
     except Exception:
         user_id = None
 
-# Verificación final
 if not user_id:
     st.error("No se pudo obtener el ID de usuario. Por favor, inicia sesión de nuevo.")
     st.stop()
@@ -313,7 +310,8 @@ if menu == "🏠 Salpicadero":
     col_f1.metric("Facturas emitidas", num_facturas)
     col_f2.metric("Gastos registrados", num_gastos)
     col_f3.metric("Promedio por factura", money(bv/num_facturas) if num_facturas > 0 else "0.00 €")
-    # ════════════════════════════════════════════════════════════
+
+# ════════════════════════════════════════════════════════════
 # CLIENTES
 # ════════════════════════════════════════════════════════════
 elif menu == "👥 Clientes":
@@ -478,24 +476,10 @@ elif menu == "👥 Clientes":
         clientes_display = clientes_df[["name", "tax_id", "address", "type"]].copy()
         clientes_display["type"] = clientes_display["type"].map({"b2b": "Empresa", "b2c": "Particular"})
         clientes_display.columns = ["Nombre", "NIF/CIF", "Dirección", "Tipo"]
-        
-        column_config = {
-            "Nombre": st.column_config.TextColumn("Nombre", width="medium"),
-            "NIF/CIF": st.column_config.TextColumn("NIF/CIF", width="small"),
-            "Dirección": st.column_config.TextColumn("Dirección", width="large"),
-            "Tipo": st.column_config.TextColumn("Tipo", width="small"),
-        }
-        
-        st.dataframe(
-            clientes_display,
-            hide_index=True,
-            use_container_width=True,
-            column_config=column_config
-        )
+        st.dataframe(clientes_display, hide_index=True, use_container_width=True)
     else:
         st.info("No hay clientes registrados.")
-
-# ════════════════════════════════════════════════════════════
+        # ════════════════════════════════════════════════════════════
 # PROVEEDORES
 # ════════════════════════════════════════════════════════════
 elif menu == "🤝 Proveedores":
@@ -651,19 +635,7 @@ elif menu == "🤝 Proveedores":
     if not proveedores_df.empty:
         proveedores_display = proveedores_df[["name", "tax_id", "address"]].copy()
         proveedores_display.columns = ["Nombre", "NIF/CIF", "Dirección"]
-        
-        column_config = {
-            "Nombre": st.column_config.TextColumn("Nombre", width="medium"),
-            "NIF/CIF": st.column_config.TextColumn("NIF/CIF", width="small"),
-            "Dirección": st.column_config.TextColumn("Dirección", width="large"),
-        }
-        
-        st.dataframe(
-            proveedores_display,
-            hide_index=True,
-            use_container_width=True,
-            column_config=column_config
-        )
+        st.dataframe(proveedores_display, hide_index=True, use_container_width=True)
     else:
         st.info("No hay proveedores registrados.")
 
@@ -837,25 +809,12 @@ elif menu == "📦 Productos":
     if not productos_df.empty:
         productos_display = productos_df[["name", "description", "price", "default_vat_percentage", "default_irpf_percentage"]].copy()
         productos_display.columns = ["Nombre", "Descripción", "Precio", "IVA %", "IRPF %"]
-        
-        column_config = {
-            "Nombre": st.column_config.TextColumn("Nombre", width="medium"),
-            "Descripción": st.column_config.TextColumn("Descripción", width="large"),
-            "Precio": st.column_config.NumberColumn("Precio", format="%.2f €", width="small"),
-            "IVA %": st.column_config.NumberColumn("IVA %", format="%d %%", width="small"),
-            "IRPF %": st.column_config.NumberColumn("IRPF %", format="%d %%", width="small"),
-        }
-        
-        st.dataframe(
-            productos_display,
-            hide_index=True,
-            use_container_width=True,
-            column_config=column_config
-        )
+        st.dataframe(productos_display, hide_index=True, use_container_width=True)
     else:
         st.info("No hay productos en el catálogo.")
-        # ════════════════════════════════════════════════════════════
-# VENTAS (con tabla mejorada: iconos, filtros y ordenación)
+
+# ════════════════════════════════════════════════════════════
+# VENTAS
 # ════════════════════════════════════════════════════════════
 elif menu == "💰 Ventas":
     st.title("Facturas de Venta")
@@ -934,7 +893,7 @@ elif menu == "💰 Ventas":
                         base_linea = cantidad * precio
                         vat_amount = base_linea * vat / 100
                         irpf_amount = base_linea * irpf / 100
-                        total_linea = base_linea + vat_amount - irpf_amount  # CORREGIDO: IRPF se resta
+                        total_linea = base_linea + vat_amount - irpf_amount
                         st.text(f"Total: {money(total_linea)}")
                     descripcion_linea = desc_manual if prod_sel == "-- Manual --" and desc_manual.strip() else (prod_sel if prod_sel != "-- Manual --" else f"Concepto manual {i+1}")
                     prod_id = None
@@ -957,7 +916,7 @@ elif menu == "💰 Ventas":
                 base_total = sum(l["base_amount"] for l in lineas)
                 vat_total = sum(l["vat_amount"] for l in lineas)
                 irpf_total = sum(l["irpf_amount"] for l in lineas)
-                total_factura = base_total + vat_total - irpf_total  # CORREGIDO: IRPF se resta
+                total_factura = base_total + vat_total - irpf_total
                 st.write(f"Base imponible: {money(base_total)} | IVA: {money(vat_total)} | IRPF: -{money(irpf_total)} | TOTAL: {money(total_factura)}")
                 if st.form_submit_button("Guardar factura") and num:
                     inv_data = {
@@ -1032,7 +991,7 @@ elif menu == "💰 Ventas":
                         base_linea = cantidad * precio
                         vat_amount = base_linea * vat / 100
                         irpf_amount = base_linea * irpf / 100
-                        total_linea = base_linea + vat_amount - irpf_amount  # CORREGIDO: IRPF se resta
+                        total_linea = base_linea + vat_amount - irpf_amount
                         st.text(f"Total: {money(total_linea)}")
                     lineas.append({
                         "product_id": lin.get("product_id") if i < len(lineas_original) else None,
@@ -1049,7 +1008,7 @@ elif menu == "💰 Ventas":
                 base_total = sum(l["base_amount"] for l in lineas)
                 vat_total = sum(l["vat_amount"] for l in lineas)
                 irpf_total = sum(l["irpf_amount"] for l in lineas)
-                total_factura = base_total + vat_total - irpf_total  # CORREGIDO: IRPF se resta
+                total_factura = base_total + vat_total - irpf_total
                 st.write(f"Base imponible: {money(base_total)} | IVA: {money(vat_total)} | IRPF: -{money(irpf_total)} | TOTAL: {money(total_factura)}")
                 if st.form_submit_button("Guardar rectificativa") and num:
                     inv_data = {
@@ -1091,7 +1050,7 @@ elif menu == "💰 Ventas":
                     st.session_state.modo_rectificativa = False
                     st.rerun()
 
-    # ============ TABLA MEJORADA DE FACTURAS EMITIDAS ============
+    # ============ TABLA DE FACTURAS EMITIDAS ============
     inv_df = get_invoices(user_id)
     if not inv_df.empty:
         inv_display = inv_df.copy()
@@ -1250,8 +1209,6 @@ elif menu == "💰 Ventas":
                             st.download_button("⬇️ Descargar PDF", pdf_bytes, f"Factura_{factura_row['invoice_number']}.pdf", mime="application/pdf")
                         
                         if st.button("📄 Descargar XML FacturaE", key=f"xml_{fact_id}"):
-                            from facturae_utils import generar_facturae_xml
-                            
                             if tiene_certificado(user_id):
                                 xml_str = generar_facturae_xml(
                                     factura_row, cliente, company_config, lineas_fact_list,
@@ -1508,8 +1465,7 @@ elif menu == "🛒 Compras":
                             st.error(f"Error: {e}")
     else:
         st.info("No hay gastos registrados.")
-
-# ════════════════════════════════════════════════════════════
+        # ════════════════════════════════════════════════════════════
 # FACTURACIÓN RECURRENTE
 # ════════════════════════════════════════════════════════════
 elif menu == "🔄 Facturación recurrente":
@@ -1592,8 +1548,9 @@ elif menu == "🔄 Facturación recurrente":
             else:
                 st.info("No hay facturas pendientes para hoy")
         except Exception as e:
-            st.error(f"error al generar facturas recurrentes: {e}")
-            # ════════════════════════════════════════════════════════════
+            st.error(f"Error al generar facturas recurrentes: {e}")
+
+# ════════════════════════════════════════════════════════════
 # LIBRO CONTABLE GENERAL
 # ════════════════════════════════════════════════════════════
 elif menu == "📖 Libro Contable General":
@@ -1639,7 +1596,6 @@ elif menu == "📒 Contabilidad":
             st.info("Aún no hay asientos contables.")
     elif submenu == "Mayor":
         try:
-            # Obtener los journal_entries del usuario
             entries_user = supabase.table("journal_entries").select("id").eq("user_id", user_id).execute()
             entry_ids = [e["id"] for e in entries_user.data] if entries_user.data else []
             
@@ -1716,7 +1672,7 @@ elif menu == "📒 Contabilidad":
         st.caption("Balance simplificado: Activo = facturas emitidas, Pasivo = gastos registrados.")
 
 # ════════════════════════════════════════════════════════════
-# IMPUESTOS TRIMESTRALES (con Modelo 303 mejorado)
+# IMPUESTOS TRIMESTRALES
 # ════════════════════════════════════════════════════════════
 elif menu == "🏛️ Impuestos Trimestrales":
     st.title("Liquidación Trimestral de IVA e IRPF")
@@ -1728,7 +1684,6 @@ elif menu == "🏛️ Impuestos Trimestrales":
     elif mes_actual <= 9: trimestre_actual = "3T (Jul-Sep)"
     else: trimestre_actual = "4T (Oct-Dic)"
     
-    # Años dinámicos
     anios_disponibles = list(range(anio_actual - 5, anio_actual + 6))
     anio = st.selectbox("Año", anios_disponibles, index=5)
     
@@ -1778,7 +1733,6 @@ elif menu == "🏛️ Impuestos Trimestrales":
     col8.metric("% aplicado", "20 %")
     col9.metric("💶 Pago fraccionado", money(pago_fraccionado))
     
-    # ============ DESCARGA DEL MODELO 303 MEJORADA ============
     st.markdown("---")
     st.subheader("📄 Modelo 303")
     
@@ -1835,7 +1789,6 @@ elif menu == "🏛️ Impuestos Trimestrales":
                     key="descargar_fichero_303"
                 )
                 
-                # Validar el fichero generado
                 es_valido, mensaje = validar_fichero_aeat(fichero_completo)
                 if es_valido:
                     st.success(mensaje)
@@ -1878,18 +1831,15 @@ elif menu == "🏦 Conciliación Bancaria":
     with tab2:
         st.subheader("Importar desde GoCardless")
         
-        # Obtener token para listar bancos
         token_bancos = obtener_token_gocardless()
         
         if token_bancos:
-            # Intentar obtener bancos disponibles
             try:
                 bancos = obtener_bancos_disponibles(token_bancos, "ES")
             except Exception:
                 bancos = []
             
             if bancos:
-                # Selector de banco
                 banco_dict = {b.get("name", "Desconocido"): b.get("id", "") for b in bancos}
                 banco_seleccionado = st.selectbox(
                     "🏦 Selecciona tu banco",
@@ -2159,7 +2109,7 @@ elif menu == "📝 Presupuestos":
                 base_linea = cantidad * precio
                 vat_amount = base_linea * vat / 100
                 irpf_amount = base_linea * irpf / 100
-                total_linea = base_linea + vat_amount - irpf_amount  # CORREGIDO: IRPF se resta
+                total_linea = base_linea + vat_amount - irpf_amount
                 st.text(f"Total: {money(total_linea)}")
             descripcion_linea = f"{prod_sel}\n{desc_manual.strip()}" if prod_sel != "-- Manual --" and desc_manual.strip() else (desc_manual.strip() if desc_manual.strip() else prod_sel)
             lineas.append({"description": descripcion_linea, "quantity": cantidad, "unit_price": precio, "base_amount": base_linea, "vat_percentage": vat, "vat_amount": vat_amount, "irpf_percentage": irpf, "irpf_amount": irpf_amount, "total": total_linea})
@@ -2168,7 +2118,7 @@ elif menu == "📝 Presupuestos":
             base_total = sum(l["base_amount"] for l in lineas)
             vat_total = sum(l["vat_amount"] for l in lineas)
             irpf_total = sum(l["irpf_amount"] for l in lineas)
-            total = base_total + vat_total - irpf_total  # CORREGIDO: IRPF se resta
+            total = base_total + vat_total - irpf_total
         else:
             base_total = vat_total = irpf_total = total = 0.0
 
@@ -2452,7 +2402,7 @@ elif menu == "💳 Suscripción":
     st.caption("Los pagos se procesan de forma segura a través de Stripe. Puedes cancelar en cualquier momento.")
 
 # ════════════════════════════════════════════════════════════
-# CONFIGURACIÓN (con gestión de certificado digital)
+# CONFIGURACIÓN
 # ════════════════════════════════════════════════════════════
 elif menu == "⚙️ Configuración":
     st.title("Configuración de empresa y plantillas")
@@ -2563,5 +2513,3 @@ elif menu == "⚙️ Configuración":
         pdf_bytes = make_invoice_pdf_from_template(ejemplo_invoice, ejemplo_client, ejemplo_company, ejemplo_lineas)
         if pdf_bytes:
             st.download_button("Descargar factura de prueba", pdf_bytes, "prueba_factura.pdf", "application/pdf")
-
-    
