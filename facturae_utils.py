@@ -30,6 +30,26 @@ def _safe_str(val, default=""):
         return default
     return str(val).strip()
 
+def _es_persona_juridica(nif):
+    """
+    Determina si un NIF es de persona jurídica (empresa) o física (autónomo).
+    - Letras A, B, C, D, E, F, G, H, J, N, P, Q, R, S, U, V, W = Jurídica
+    - Números o letras K, L, M, X, Y, Z = Física
+    """
+    nif = _safe_str(nif, "").upper().strip()
+    if not nif:
+        return True  # Por defecto, asumir jurídica
+    
+    primer_caracter = nif[0]
+    
+    if primer_caracter.isdigit():
+        return False  # DNI/NIE = Física
+    
+    if primer_caracter in ['K', 'L', 'M', 'X', 'Y', 'Z']:
+        return False  # NIE = Física
+    
+    return True  # CIF = Jurídica
+
 def _parse_address(address_str):
     """
     Parsea una dirección completa y extrae ciudad y provincia.
@@ -44,7 +64,6 @@ def _parse_address(address_str):
     province = "Madrid"
     address = address_str
     
-    # Intentar extraer ciudad y provincia del formato "dirección, CIUDAD (PROVINCIA)"
     if "(" in address_str and ")" in address_str:
         try:
             province_part = address_str[address_str.rindex("(")+1:address_str.rindex(")")]
@@ -58,7 +77,6 @@ def _parse_address(address_str):
         if len(parts) == 2:
             address = parts[0].strip()
             town_candidate = parts[1].strip()
-            # Si la ciudad contiene paréntesis de provincia, separar
             if "(" in town_candidate:
                 town = town_candidate[:town_candidate.index("(")].strip()
             else:
@@ -67,12 +85,79 @@ def _parse_address(address_str):
     
     return address[:100], town[:50], province[:50]
 
+def _crear_party_tax_identification(parent, nif):
+    """
+    Crea el bloque TaxIdentification con PersonTypeCode y ResidenceTypeCode.
+    Retorna True si es persona jurídica, False si es física.
+    """
+    tax_id = ET.SubElement(parent, _qn("TaxIdentification"))
+    
+    es_juridica = _es_persona_juridica(nif)
+    person_type = "J" if es_juridica else "F"
+    
+    ET.SubElement(tax_id, _qn("PersonTypeCode")).text = person_type
+    ET.SubElement(tax_id, _qn("ResidenceTypeCode")).text = "R"
+    ET.SubElement(tax_id, _qn("TaxIdentificationNumber")).text = nif
+    
+    return es_juridica
+
+def _crear_party_legal_entity(parent, name, address_str, es_juridica):
+    """
+    Crea LegalEntity (para empresas) o Individual (para autónomos).
+    FirstSurname es OBLIGATORIO en Individual según XSD.
+    """
+    if es_juridica:
+        # Empresa - LegalEntity con CorporateName
+        legal = ET.SubElement(parent, _qn("LegalEntity"))
+        ET.SubElement(legal, _qn("CorporateName")).text = name
+        return legal
+    else:
+        # Autónomo - Individual con Name y FirstSurname (OBLIGATORIO)
+        individual = ET.SubElement(parent, _qn("Individual"))
+        
+        # Intentar separar nombre y apellido
+        name_parts = name.split()
+        if len(name_parts) >= 3:
+            first_name = " ".join(name_parts[:2])
+            first_surname = " ".join(name_parts[2:])
+        elif len(name_parts) == 2:
+            first_name = name_parts[0]
+            first_surname = name_parts[1]
+        else:
+            # Una sola palabra - usar el mismo valor para ambos
+            first_name = name
+            first_surname = name
+        
+        ET.SubElement(individual, _qn("Name")).text = first_name[:40]
+        # FirstSurname SIEMPRE se incluye (obligatorio)
+        ET.SubElement(individual, _qn("FirstSurname")).text = (first_surname or first_name)[:40]
+        
+        return individual
+
+def _crear_address_in_spanish(parent, address_str, postcode, country="ESP"):
+    """
+    Crea el bloque AddressInSpain con los datos parseados.
+    """
+    addr_text, town, province = _parse_address(address_str)
+    
+    addr = ET.SubElement(parent, _qn("AddressInSpain"))
+    ET.SubElement(addr, _qn("Address")).text = addr_text or "Calle Principal 1"
+    ET.SubElement(addr, _qn("PostCode")).text = postcode or "28001"
+    ET.SubElement(addr, _qn("Town")).text = town
+    ET.SubElement(addr, _qn("Province")).text = province
+    ET.SubElement(addr, _qn("CountryCode")).text = country
+    
+    return addr
+
 def generar_facturae_xml(invoice, client, company, lineas, user_id=None, firmar=False, certificado=None, password=None, validar=True, usar_timestamp=True):
     """
-    Genera un XML compatible con FacturaE v3.2.2.
+    Genera XML FacturaE v3.2.2 con estructura XSD correcta.
     
-    SECUENCIA EXACTA SEGÚN XSD OFICIAL:
-    Facturae → FileHeader → Parties → Invoices
+    Estructura:
+    - InvoiceHeader: InvoiceNumber + InvoiceDocumentType + InvoiceClass
+    - TaxIdentification: PersonTypeCode + ResidenceTypeCode + TaxIdentificationNumber
+    - Individual (autónomos) o LegalEntity (empresas)
+    - FirstSurname OBLIGATORIO en Individual
     """
     invoice = invoice or {}
     client = client or {}
@@ -93,14 +178,12 @@ def generar_facturae_xml(invoice, client, company, lineas, user_id=None, firmar=
     
     # ═══════════════════════════════════════════════════════
     # 1. FILE HEADER
-    # Secuencia: SchemaVersion, Modality, InvoiceIssuerType, Batch
     # ═══════════════════════════════════════════════════════
     file_header = ET.SubElement(root, _qn("FileHeader"))
     ET.SubElement(file_header, _qn("SchemaVersion")).text = "3.2.2"
     ET.SubElement(file_header, _qn("Modality")).text = "I"
     ET.SubElement(file_header, _qn("InvoiceIssuerType")).text = "EM"
     
-    # Batch
     batch = ET.SubElement(file_header, _qn("Batch"))
     ET.SubElement(batch, _qn("BatchIdentifier")).text = inv_num
     ET.SubElement(batch, _qn("InvoicesCount")).text = "1"
@@ -124,56 +207,28 @@ def generar_facturae_xml(invoice, client, company, lineas, user_id=None, firmar=
     # --- SELLER PARTY (Emisor) ---
     seller_party = ET.SubElement(parties, _qn("SellerParty"))
     
-    # TaxIdentification
-    seller_tax_id = ET.SubElement(seller_party, _qn("TaxIdentification"))
-    ET.SubElement(seller_tax_id, _qn("TaxIdentificationType")).text = "01"
-    ET.SubElement(seller_tax_id, _qn("TaxIdentificationNumber")).text = _safe_str(
-        company.get("company_tax_id") or company.get("tax_id"), "B00000000"
-    ).upper()
+    cif_emisor = _safe_str(company.get("company_tax_id") or company.get("tax_id"), "B00000000").upper()
+    es_juridica_emisor = _crear_party_tax_identification(seller_party, cif_emisor)
     
-    # LegalEntity
-    seller_legal = ET.SubElement(seller_party, _qn("LegalEntity"))
-    ET.SubElement(seller_legal, _qn("CorporateName")).text = _safe_str(
-        company.get("company_name") or company.get("name"), "Empresa Emisora"
-    )
-    
-    # Parsear dirección del emisor
-    seller_full_address = _safe_str(company.get("company_address") or company.get("address"))
-    seller_addr_text, seller_town, seller_province = _parse_address(seller_full_address)
+    seller_name = _safe_str(company.get("company_name") or company.get("name"), "Empresa Emisora")
+    seller_address = _safe_str(company.get("company_address") or company.get("address"))
     seller_postcode = _safe_str(company.get("post_code") or company.get("company_post_code"), "28001")
     
-    seller_addr = ET.SubElement(seller_legal, _qn("AddressInSpain"))
-    ET.SubElement(seller_addr, _qn("Address")).text = seller_addr_text or "Calle Principal 1"
-    ET.SubElement(seller_addr, _qn("PostCode")).text = seller_postcode
-    ET.SubElement(seller_addr, _qn("Town")).text = seller_town
-    ET.SubElement(seller_addr, _qn("Province")).text = seller_province
-    ET.SubElement(seller_addr, _qn("CountryCode")).text = "ESP"
+    seller_entity = _crear_party_legal_entity(seller_party, seller_name, seller_address, es_juridica_emisor)
+    _crear_address_in_spanish(seller_entity, seller_address, seller_postcode)
     
     # --- BUYER PARTY (Receptor) ---
     buyer_party = ET.SubElement(parties, _qn("BuyerParty"))
     
-    # TaxIdentification
-    buyer_tax_id = ET.SubElement(buyer_party, _qn("TaxIdentification"))
-    ET.SubElement(buyer_tax_id, _qn("TaxIdentificationType")).text = "01"
-    ET.SubElement(buyer_tax_id, _qn("TaxIdentificationNumber")).text = _safe_str(
-        client.get("tax_id"), "A00000000"
-    ).upper()
+    cif_receptor = _safe_str(client.get("tax_id"), "A00000000").upper()
+    es_juridica_receptor = _crear_party_tax_identification(buyer_party, cif_receptor)
     
-    # LegalEntity
-    buyer_legal = ET.SubElement(buyer_party, _qn("LegalEntity"))
-    ET.SubElement(buyer_legal, _qn("CorporateName")).text = _safe_str(client.get("name"), "Cliente")
-    
-    # Parsear dirección del receptor
-    buyer_full_address = _safe_str(client.get("address"))
-    buyer_addr_text, buyer_town, buyer_province = _parse_address(buyer_full_address)
+    buyer_name = _safe_str(client.get("name"), "Cliente")
+    buyer_address = _safe_str(client.get("address"))
     buyer_postcode = _safe_str(client.get("post_code"), "28001")
     
-    buyer_addr = ET.SubElement(buyer_legal, _qn("AddressInSpain"))
-    ET.SubElement(buyer_addr, _qn("Address")).text = buyer_addr_text or "Calle Cliente 1"
-    ET.SubElement(buyer_addr, _qn("PostCode")).text = buyer_postcode
-    ET.SubElement(buyer_addr, _qn("Town")).text = buyer_town
-    ET.SubElement(buyer_addr, _qn("Province")).text = buyer_province
-    ET.SubElement(buyer_addr, _qn("CountryCode")).text = "ESP"
+    buyer_entity = _crear_party_legal_entity(buyer_party, buyer_name, buyer_address, es_juridica_receptor)
+    _crear_address_in_spanish(buyer_entity, buyer_address, buyer_postcode)
     
     # ═══════════════════════════════════════════════════════
     # 3. INVOICES
@@ -181,11 +236,10 @@ def generar_facturae_xml(invoice, client, company, lineas, user_id=None, firmar=
     invoices = ET.SubElement(root, _qn("Invoices"))
     invoice_elem = ET.SubElement(invoices, _qn("Invoice"))
     
-    # InvoiceNumber (directamente bajo Invoice)
-    ET.SubElement(invoice_elem, _qn("InvoiceNumber")).text = inv_num
-    
-    # InvoiceHeader (solo InvoiceClass)
+    # InvoiceHeader - InvoiceNumber DENTRO de InvoiceHeader
     invoice_header = ET.SubElement(invoice_elem, _qn("InvoiceHeader"))
+    ET.SubElement(invoice_header, _qn("InvoiceNumber")).text = inv_num
+    ET.SubElement(invoice_header, _qn("InvoiceDocumentType")).text = "FC"
     ET.SubElement(invoice_header, _qn("InvoiceClass")).text = "OR" if invoice.get("tipo") == "rectificativa" else "OO"
     
     # InvoiceIssueData
@@ -207,7 +261,7 @@ def generar_facturae_xml(invoice, client, company, lineas, user_id=None, firmar=
     tx_amt = ET.SubElement(tax, _qn("TaxAmount"))
     ET.SubElement(tx_amt, _qn("TotalAmount")).text = f"{vat_amt:.2f}"
     
-    # TaxesWithheld (IRPF) - solo si hay IRPF
+    # TaxesWithheld (IRPF)
     if irpf_pct > 0:
         taxes_withheld = ET.SubElement(invoice_elem, _qn("TaxesWithheld"))
         tax_w = ET.SubElement(taxes_withheld, _qn("Tax"))
@@ -248,7 +302,6 @@ def generar_facturae_xml(invoice, client, company, lineas, user_id=None, firmar=
         ET.SubElement(item, _qn("TotalCost")).text = f"{line_base:.2f}"
         ET.SubElement(item, _qn("GrossAmount")).text = f"{line_base:.2f}"
         
-        # Impuestos por línea
         line_taxes = ET.SubElement(item, _qn("TaxesOutputs"))
         line_tax = ET.SubElement(line_taxes, _qn("Tax"))
         ET.SubElement(line_tax, _qn("TaxTypeCode")).text = "01"
@@ -272,9 +325,7 @@ def generar_facturae_xml(invoice, client, company, lineas, user_id=None, firmar=
         account = ET.SubElement(installment, _qn("AccountToBeCredited"))
         ET.SubElement(account, _qn("IBAN")).text = iban
 
-    # ═══════════════════════════════════════════════════════
     # Conversión a string
-    # ═══════════════════════════════════════════════════════
     xml_bytes = ET.tostring(root, encoding="utf-8", method="xml")
     dom = minidom.parseString(xml_bytes)
     pretty_xml = "\n".join([line for line in dom.toprettyxml(indent="  ").split("\n") if line.strip()])
