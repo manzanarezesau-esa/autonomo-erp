@@ -1498,16 +1498,14 @@ elif menu == "🛒 Compras":
         st.info("No hay gastos registrados.")
 
 # ════════════════════════════════════════════════════════════
-# EMPLEADOS (NUEVO)
+# EMPLEADOS (CON NÓMINAS Y SEGURIDAD SOCIAL)
 # ════════════════════════════════════════════════════════════
 elif menu == "👥 Empleados":
     st.title("👥 Gestión de Empleados y Nóminas")
     
-    tab_empleados, tab_nominas, tab_modelo111 = st.tabs(["👥 Empleados", "💰 Nóminas", "📄 Modelo 111"])
+    tab_empleados, tab_nominas, tab_ss, tab_modelo111 = st.tabs(["👥 Empleados", "💰 Nóminas", "🏥 Seguridad Social", "📄 Modelo 111"])
     
-    # ════════════════════════════════════════════════════════════
     # TAB 1: EMPLEADOS
-    # ════════════════════════════════════════════════════════════
     with tab_empleados:
         st.subheader("👥 Empleados Registrados")
         
@@ -1568,9 +1566,7 @@ elif menu == "👥 Empleados":
         except Exception as e:
             st.error(f"Error al cargar empleados: {e}")
     
-    # ════════════════════════════════════════════════════════════
     # TAB 2: NÓMINAS
-    # ════════════════════════════════════════════════════════════
     with tab_nominas:
         st.subheader("💰 Generar Nómina")
         
@@ -1611,26 +1607,78 @@ elif menu == "👥 Empleados":
                 col_r5.metric("SS Empresa", money(ss_empresa))
                 col_r6.metric("💰 Coste Total Empresa", money(coste_empresa))
                 
+                nom_existente = None
+                try:
+                    check_res = supabase.table("payrolls").select("id").eq("user_id", user_id).eq("employee_id", empleado["id"]).eq("month", mes_nomina).eq("year", date.today().year).execute()
+                    nom_existente = check_res.data[0]["id"] if check_res.data else None
+                except Exception:
+                    pass
+                
+                if nom_existente:
+                    st.warning(f"⚠️ Ya existe una nómina de {empleado['full_name']} para {mes_nomina}. Se actualizará.")
+                
                 if st.button("💾 Guardar nómina"):
                     try:
-                        supabase.table("payrolls").insert({
-                            "user_id": user_id,
-                            "employee_id": empleado["id"],
-                            "month": mes_nomina,
-                            "year": date.today().year,
-                            "gross_salary": salario,
-                            "irpf_amount": irpf_amount,
-                            "social_security_employee": ss_emp,
-                            "social_security_company": ss_empresa,
-                            "net_salary": neto,
-                            "total_company_cost": coste_empresa
-                        }).execute()
-                        st.success(f"Nómina de {empleado['full_name']} guardada para {mes_nomina}")
+                        if nom_existente:
+                            supabase.table("payrolls").update({
+                                "gross_salary": salario,
+                                "irpf_amount": irpf_amount,
+                                "social_security_employee": ss_emp,
+                                "social_security_company": ss_empresa,
+                                "net_salary": neto,
+                                "total_company_cost": coste_empresa
+                            }).eq("id", nom_existente).execute()
+                            st.success(f"Nómina actualizada para {mes_nomina}")
+                        else:
+                            supabase.table("payrolls").insert({
+                                "user_id": user_id,
+                                "employee_id": empleado["id"],
+                                "month": mes_nomina,
+                                "year": date.today().year,
+                                "gross_salary": salario,
+                                "irpf_amount": irpf_amount,
+                                "social_security_employee": ss_emp,
+                                "social_security_company": ss_empresa,
+                                "net_salary": neto,
+                                "total_company_cost": coste_empresa
+                            }).execute()
+                            
+                            try:
+                                expense_data = {
+                                    "user_id": user_id,
+                                    "expense_number": f"NOM-{mes_nomina[:3].upper()}-{date.today().year}",
+                                    "date": str(date.today()),
+                                    "month": mes_nomina,
+                                    "supplier_id": None,
+                                    "category": f"Nómina {empleado['full_name']}",
+                                    "expense_type": "Nomina",
+                                    "base_amount": coste_empresa,
+                                    "vat_percentage": 0,
+                                    "vat_amount": 0,
+                                    "total": coste_empresa,
+                                    "attachment_url": None
+                                }
+                                
+                                exito_gasto, gasto_id, mensaje_gasto = crear_gasto_con_rollback(
+                                    expense_data, user_id, f"Empleado: {empleado['full_name']}"
+                                )
+                                
+                                if exito_gasto:
+                                    st.success(f"Nómina guardada y gasto contabilizado: {money(coste_empresa)}")
+                                else:
+                                    st.warning(f"Nómina guardada pero gasto no creado: {mensaje_gasto}")
+                            except Exception as e:
+                                st.warning(f"Nómina guardada pero error al crear gasto: {e}")
+                            
+                            st.success(f"Nómina de {empleado['full_name']} guardada para {mes_nomina}")
+                        
+                        get_expenses.clear()
+                        time.sleep(0.5)
                         st.rerun()
                     except Exception as e:
                         st.error(f"Error: {e}")
             else:
-                st.info("No hay empleados registrados. Añade uno primero en la pestaña 'Empleados'.")
+                st.info("No hay empleados registrados.")
         except Exception as e:
             st.error(f"Error: {e}")
         
@@ -1647,12 +1695,76 @@ elif menu == "👥 Empleados":
                 nom_display = nom_df[["month", "year", "empleado", "gross_salary", "net_salary", "total_company_cost"]].copy()
                 nom_display.columns = ["Mes", "Año", "Empleado", "Bruto", "Neto", "Coste Empresa"]
                 st.dataframe(nom_display, hide_index=True, use_container_width=True)
+            else:
+                st.info("No hay nóminas registradas.")
         except Exception:
             pass
     
-    # ════════════════════════════════════════════════════════════
-    # TAB 3: MODELO 111
-    # ════════════════════════════════════════════════════════════
+    # TAB 3: SEGURIDAD SOCIAL
+    with tab_ss:
+        st.subheader("🏥 Gastos de Seguridad Social")
+        
+        with st.form("add_ss_expense", clear_on_submit=True):
+            st.markdown("**➕ Registrar pago de Seguridad Social**")
+            col_ss1, col_ss2 = st.columns(2)
+            with col_ss1:
+                mes_ss = st.selectbox("Mes", LISTA_MESES, index=datetime.now().month - 1)
+                tipo_ss = st.selectbox("Tipo de cotización", ["Régimen General", "Autónomos (RETA)"])
+            with col_ss2:
+                importe_ss = st.number_input("Importe (€)", min_value=0.0, step=50.0)
+                fecha_ss = st.date_input("Fecha de pago", date.today())
+            
+            if st.form_submit_button("💾 Guardar pago SS"):
+                if importe_ss > 0:
+                    try:
+                        expense_data = {
+                            "user_id": user_id,
+                            "expense_number": f"SS-{mes_ss[:3].upper()}-{date.today().year}",
+                            "date": str(fecha_ss),
+                            "month": mes_ss,
+                            "supplier_id": None,
+                            "category": f"Seguridad Social {tipo_ss}",
+                            "expense_type": "Seguridad Social",
+                            "base_amount": importe_ss,
+                            "vat_percentage": 0,
+                            "vat_amount": 0,
+                            "total": importe_ss,
+                            "attachment_url": None
+                        }
+                        
+                        exito, gasto_id, mensaje = crear_gasto_con_rollback(
+                            expense_data, user_id, f"Tesorería Seguridad Social"
+                        )
+                        
+                        if exito:
+                            st.success(f"Pago de Seguridad Social registrado: {money(importe_ss)}")
+                            get_expenses.clear()
+                            time.sleep(0.5)
+                            st.rerun()
+                        else:
+                            st.error(mensaje)
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+                else:
+                    st.error("El importe debe ser mayor que 0.")
+        
+        st.markdown("---")
+        st.subheader("📋 Pagos de Seguridad Social registrados")
+        try:
+            ss_res = supabase.table("expenses_v2").select("*").eq("user_id", user_id).eq("expense_type", "Seguridad Social").order("date", desc=True).execute()
+            if ss_res.data:
+                ss_df = pd.DataFrame(ss_res.data)
+                ss_display = ss_df[["expense_number", "date", "month", "category", "total"]].copy()
+                ss_display.columns = ["Nº", "Fecha", "Mes", "Descripción", "Importe"]
+                ss_display["Fecha"] = pd.to_datetime(ss_display["Fecha"]).dt.strftime("%d/%m/%Y")
+                st.dataframe(ss_display, hide_index=True, use_container_width=True)
+                st.metric("Total SS registrado", money(ss_df["total"].sum()))
+            else:
+                st.info("No hay pagos de Seguridad Social registrados.")
+        except Exception as e:
+            st.info(f"Tabla de gastos no disponible: {e}")
+    
+    # TAB 4: MODELO 111
     with tab_modelo111:
         st.subheader("📄 Modelo 111 - Retenciones IRPF")
         
