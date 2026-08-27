@@ -2861,7 +2861,7 @@ with tab_suscripciones:
 # ════════════════════════════════════════════════════════════
 # SUSCRIPCIÓN (COMPLETA)
 # ════════════════════════════════════════════════════════════
-elif menu == "💳 Suscripción":
+  elif menu == "💳 Suscripción":
     st.title("💳 Planes de Suscripción")
     
     if not user_id:
