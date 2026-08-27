@@ -13,3 +13,4 @@ cryptography
 lxml
 pycryptodome
 stripe
+openpyxl
