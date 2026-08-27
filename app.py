@@ -509,6 +509,7 @@ elif menu == "👥 Clientes":
         st.dataframe(clientes_display, hide_index=True, use_container_width=True)
     else:
         st.info("No hay clientes registrados.")
+
 # ════════════════════════════════════════════════════════════
 # PROVEEDORES
 # ════════════════════════════════════════════════════════════
@@ -668,7 +669,6 @@ elif menu == "🤝 Proveedores":
         st.dataframe(proveedores_display, hide_index=True, use_container_width=True)
     else:
         st.info("No hay proveedores registrados.")
-
 # ════════════════════════════════════════════════════════════
 # PRODUCTOS
 # ════════════════════════════════════════════════════════════
@@ -2169,7 +2169,7 @@ elif menu == "📊 Dashboards":
                 st.pyplot(fig3)
 
 # ════════════════════════════════════════════════════════════
-# PRESUPUESTOS (COMPLETO - SIN RESUMIR)
+# PRESUPUESTOS (COMPLETO)
 # ════════════════════════════════════════════════════════════
 elif menu == "📝 Presupuestos":
     st.title("📝 Presupuestos")
@@ -2458,13 +2458,12 @@ elif menu == "👥 Colaboradores":
     st.title("Colaboradores")
     st.info("Funcionalidad en desarrollo.")
 
-# ════════════════════════════════════════════════════════════
-# PANEL DE ADMINISTRACIÓN (Con verificación por email)
+# # ════════════════════════════════════════════════════════════
+# PANEL DE ADMINISTRACIÓN (CORREGIDO - users_view + admin_client)
 # ════════════════════════════════════════════════════════════
 elif menu == "🔐 Panel Admin":
     st.title("🔐 Panel de Administración")
     
-    # Verificación de admin
     ADMIN_EMAILS = ["esamanzanarez@gmail.com", "admin@hondureformas.com"]
     
     es_admin = False
@@ -2487,11 +2486,28 @@ elif menu == "🔐 Panel Admin":
     
     st.success(f"✅ Acceso concedido como administrador: {st.session_state.user.email}")
     
+    # ============================================================
+    # CLIENTE ADMIN CON SERVICE ROLE KEY (sin caché)
+    # ============================================================
+    from supabase import create_client
+    
+    def get_admin_client():
+        """Crea un cliente nuevo con la Service Role Key (sin caché)."""
+        try:
+            SUPABASE_URL = st.secrets["SUPABASE_URL"]
+            SERVICE_ROLE_KEY = st.secrets["SUPABASE_SERVICE_ROLE_KEY"]
+            return create_client(SUPABASE_URL, SERVICE_ROLE_KEY)
+        except Exception as e:
+            st.error(f"❌ Error al crear cliente admin: {e}")
+            return supabase  # Fallback al cliente normal
+    
+    admin_client = get_admin_client()
+    
     PRECIOS_PLANES = {"free": 0, "basico": 15, "profesional": 30, "gestoria": 60}
     
     def registrar_accion_admin(accion, user_id_afectado, detalles=""):
         try:
-            supabase.table("admin_actions").insert({
+            admin_client.table("admin_actions").insert({
                 "admin_id": user_id,
                 "user_id": user_id_afectado,
                 "action_type": accion,
@@ -2502,12 +2518,15 @@ elif menu == "🔐 Panel Admin":
     
     tab_resumen, tab_usuarios, tab_suscripciones, tab_logs = st.tabs(["📊 Resumen", "👥 Usuarios", "💳 Suscripciones", "⚠️ Logs"])
     
+    # ════════════════════════════════════════════════════════════
+    # TAB 1: RESUMEN
+    # ════════════════════════════════════════════════════════════
     with tab_resumen:
         st.subheader("📊 Visión General")
         mrr = 0
         usuarios_activos = 0
         try:
-            subs_res = supabase.table("subscriptions").select("plan, status").execute()
+            subs_res = admin_client.table("subscriptions").select("plan, status").execute()
             if subs_res.data:
                 for s in subs_res.data:
                     if s["status"] == "active" and s["plan"] in PRECIOS_PLANES:
@@ -2519,106 +2538,276 @@ elif menu == "🔐 Panel Admin":
         
         mes_actual_nombre = LISTA_MESES[date.today().month - 1]
         try:
-            facturas_mes = supabase.table("invoices_v2").select("id").eq("month", mes_actual_nombre).execute()
+            facturas_mes = admin_client.table("invoices_v2").select("id").eq("month", mes_actual_nombre).execute()
             num_facturas_mes = len(facturas_mes.data) if facturas_mes.data else 0
         except Exception:
             num_facturas_mes = 0
         
-        col_k1, col_k2, col_k3 = st.columns(3)
+        try:
+            cobros_fallidos = admin_client.table("payments").select("id").neq("status", "paid").execute()
+            num_cobros_fallidos = len(cobros_fallidos.data) if cobros_fallidos.data else 0
+        except Exception:
+            num_cobros_fallidos = 0
+        
+        col_k1, col_k2, col_k3, col_k4 = st.columns(4)
         col_k1.metric("💰 MRR", f"{mrr:,.0f} €/mes")
         col_k2.metric("👥 Usuarios Activos", usuarios_activos)
         col_k3.metric("📄 Facturas este mes", num_facturas_mes)
+        col_k4.metric("⚠️ Cobros Fallidos", num_cobros_fallidos)
     
+    # ════════════════════════════════════════════════════════════
+    # TAB 2: USUARIOS (CORREGIDO - users_view)
+    # ════════════════════════════════════════════════════════════
     with tab_usuarios:
         st.subheader("👥 Gestión de Usuarios")
+        
         try:
-            auth_users = supabase.auth.admin.list_users()
             usuarios = []
-            for u in auth_users:
-                user_info = {"id": u.id, "email": u.email}
-                try:
-                    rol_res = supabase.table("user_roles").select("role").eq("user_id", u.id).single().execute()
-                    user_info["role"] = rol_res.data.get("role", "cliente") if rol_res.data else "cliente"
-                except Exception:
-                    user_info["role"] = "cliente"
-                try:
-                    sub_res = supabase.table("subscriptions").select("plan, status").eq("user_id", u.id).single().execute()
-                    user_info["plan"] = sub_res.data.get("plan", "free") if sub_res.data else "free"
-                    user_info["status"] = sub_res.data.get("status", "inactive") if sub_res.data else "inactive"
-                except Exception:
-                    user_info["plan"] = "free"
-                    user_info["status"] = "inactive"
-                usuarios.append(user_info)
+            
+            # 1. Intentar obtener de users_view (vista de auth.users)
+            try:
+                users_view_res = admin_client.table("users_view").select("*").execute()
+                users_view_data = users_view_res.data if users_view_res.data else []
+                
+                # Crear dict de emails desde users_view
+                emails_dict = {}
+                for u in users_view_data:
+                    if "id" in u and "email" in u:
+                        emails_dict[u["id"]] = u["email"]
+            except Exception:
+                emails_dict = {}
+            
+            # 2. Obtener roles
+            try:
+                roles_res = admin_client.table("user_roles").select("user_id, role").execute()
+                roles_dict = {r["user_id"]: r["role"] for r in roles_res.data} if roles_res.data else {}
+            except Exception:
+                roles_dict = {}
+            
+            # 3. Obtener suscripciones
+            try:
+                subs_res = admin_client.table("subscriptions").select("user_id, plan, status").execute()
+                subs_dict = {s["user_id"]: {"plan": s["plan"], "status": s["status"]} for s in subs_res.data} if subs_res.data else {}
+            except Exception:
+                subs_dict = {}
+            
+            # 4. Obtener settings (datos fiscales)
+            try:
+                settings_res = admin_client.table("settings").select("user_id, company_name, company_tax_id, company_email").execute()
+                settings_dict = {
+                    s["user_id"]: {
+                        "company_name": s.get("company_name", ""),
+                        "company_tax_id": s.get("company_tax_id", ""),
+                        "company_email": s.get("company_email", "")
+                    } for s in settings_res.data
+                } if settings_res.data else {}
+            except Exception:
+                settings_dict = {}
+            
+            # 5. Unir toda la información
+            all_user_ids = set()
+            all_user_ids.update(emails_dict.keys())
+            all_user_ids.update(roles_dict.keys())
+            all_user_ids.update(subs_dict.keys())
+            all_user_ids.update(settings_dict.keys())
+            
+            for uid in all_user_ids:
+                # Email: prioridad a users_view, luego settings.company_email
+                email = emails_dict.get(uid, "") or settings_dict.get(uid, {}).get("company_email", "")
+                
+                usuarios.append({
+                    "id": uid,
+                    "email": email,
+                    "company_name": settings_dict.get(uid, {}).get("company_name", ""),
+                    "company_tax_id": settings_dict.get(uid, {}).get("company_tax_id", ""),
+                    "role": roles_dict.get(uid, "cliente"),
+                    "plan": subs_dict.get(uid, {}).get("plan", "free"),
+                    "status": subs_dict.get(uid, {}).get("status", "inactive"),
+                })
             
             if usuarios:
-                usuarios_df = pd.DataFrame(usuarios)
-                st.dataframe(usuarios_df[["email", "plan", "role", "status"]], hide_index=True, use_container_width=True)
+                # Buscador
+                busqueda = st.text_input("🔍 Buscar por email, nombre o CIF", key="busqueda_admin_usuarios")
                 
-                email_sel = st.selectbox("Selecciona usuario", [u["email"] for u in usuarios])
-                usuario_sel = next((u for u in usuarios if u["email"] == email_sel), None)
+                usuarios_filtrados = usuarios
+                if busqueda:
+                    bl = busqueda.lower()
+                    usuarios_filtrados = [
+                        u for u in usuarios
+                        if bl in (u["email"] or "").lower()
+                        or bl in (u["company_name"] or "").lower()
+                        or bl in (u["company_tax_id"] or "").lower()
+                    ]
                 
-                if usuario_sel:
-                    user_id_sel = usuario_sel["id"]
-                    col_a1, col_a2 = st.columns(2)
-                    with col_a1:
-                        nuevo_rol = st.selectbox("Rol", ["cliente", "admin"], index=0 if usuario_sel["role"] != "admin" else 1, key=f"rol_{user_id_sel}")
-                        if st.button("🔄 Cambiar rol", key=f"btn_rol_{user_id_sel}"):
-                            supabase.table("user_roles").upsert({"user_id": user_id_sel, "role": nuevo_rol}, on_conflict="user_id").execute()
-                            registrar_accion_admin("cambiar_rol", user_id_sel, nuevo_rol)
-                            st.success("Rol actualizado")
-                            st.rerun()
-                    with col_a2:
-                        if usuario_sel["status"] == "inactive":
-                            if st.button("✅ Habilitar", key=f"btn_hab_{user_id_sel}"):
-                                supabase.table("subscriptions").update({"status": "active"}).eq("user_id", user_id_sel).execute()
-                                registrar_accion_admin("habilitar", user_id_sel)
-                                st.success("Habilitado")
-                                st.rerun()
-                        else:
-                            if st.button("🚫 Deshabilitar", key=f"btn_des_{user_id_sel}"):
-                                supabase.table("subscriptions").update({"status": "inactive"}).eq("user_id", user_id_sel).execute()
-                                registrar_accion_admin("deshabilitar", user_id_sel)
-                                st.success("Deshabilitado")
-                                st.rerun()
+                # Tabla
+                usuarios_df = pd.DataFrame(usuarios_filtrados)
+                st.dataframe(
+                    usuarios_df[["email", "company_name", "company_tax_id", "plan", "role", "status"]],
+                    hide_index=True,
+                    use_container_width=True
+                )
+                
+                # Acciones
+                if usuarios_filtrados:
+                    opciones_email = [u["email"] or u["company_name"] or str(u["id"])[:8] for u in usuarios_filtrados]
+                    email_sel = st.selectbox("Selecciona usuario para gestionar", opciones_email, key="select_usuario_admin")
+                    
+                    usuario_sel = None
+                    for u in usuarios_filtrados:
+                        if (u["email"] or u["company_name"] or str(u["id"])[:8]) == email_sel:
+                            usuario_sel = u
+                            break
+                    
+                    if usuario_sel:
+                        user_id_sel = usuario_sel["id"]
+                        st.markdown("---")
+                        st.subheader(f"Gestionar: {usuario_sel['email'] or usuario_sel['company_name']}")
+                        st.write(f"**ID:** {user_id_sel}")
+                        st.write(f"**Rol actual:** {usuario_sel['role']}")
+                        st.write(f"**Plan actual:** {usuario_sel['plan']}")
+                        st.write(f"**Estado:** {usuario_sel['status']}")
+                        
+                        col_a1, col_a2, col_a3 = st.columns(3)
+                        with col_a1:
+                            nuevo_rol = st.selectbox("Rol", ["cliente", "admin"], index=0 if usuario_sel["role"] != "admin" else 1, key=f"rol_{user_id_sel}")
+                            if st.button("🔄 Cambiar rol", key=f"btn_rol_{user_id_sel}"):
+                                try:
+                                    admin_client.table("user_roles").upsert(
+                                        {"user_id": user_id_sel, "role": nuevo_rol},
+                                        on_conflict="user_id"
+                                    ).execute()
+                                    registrar_accion_admin("cambiar_rol", user_id_sel, nuevo_rol)
+                                    st.success(f"Rol actualizado a {nuevo_rol}")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+                        with col_a2:
+                            dias_prueba = st.number_input("Días prueba", 0, 30, 7, key=f"dias_{user_id_sel}")
+                            if st.button("🎁 Conceder prueba", key=f"btn_prueba_{user_id_sel}"):
+                                try:
+                                    fecha_fin = date.today() + timedelta(days=int(dias_prueba))
+                                    admin_client.table("subscriptions").upsert(
+                                        {"user_id": user_id_sel, "plan": "profesional", "status": "trialing", "trial_end": str(fecha_fin)},
+                                        on_conflict="user_id"
+                                    ).execute()
+                                    registrar_accion_admin("conceder_prueba", user_id_sel, f"{dias_prueba} días")
+                                    st.success(f"Prueba concedida hasta {fecha_fin}")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+                        with col_a3:
+                            if usuario_sel["status"] == "inactive":
+                                if st.button("✅ Habilitar", key=f"btn_hab_{user_id_sel}"):
+                                    try:
+                                        admin_client.table("subscriptions").update({"status": "active"}).eq("user_id", user_id_sel).execute()
+                                        registrar_accion_admin("habilitar", user_id_sel)
+                                        st.success("Cuenta habilitada")
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Error: {e}")
+                            else:
+                                if st.button("🚫 Deshabilitar", key=f"btn_des_{user_id_sel}"):
+                                    try:
+                                        admin_client.table("subscriptions").update({"status": "inactive"}).eq("user_id", user_id_sel).execute()
+                                        registrar_accion_admin("deshabilitar", user_id_sel)
+                                        st.success("Cuenta deshabilitada")
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Error: {e}")
+            else:
+                st.info("No hay usuarios registrados.")
+                
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"Error al cargar usuarios: {e}")
+            st.info("Verifica que la vista 'users_view' exista en Supabase o que SUPABASE_SERVICE_ROLE_KEY esté configurada.")
     
+    # ════════════════════════════════════════════════════════════
+    # TAB 3: SUSCRIPCIONES (CORREGIDO - Mostrar email)
+    # ════════════════════════════════════════════════════════════
     with tab_suscripciones:
         st.subheader("💳 Control de Suscripciones")
+        
         try:
-            subs_res = supabase.table("subscriptions").select("*").execute()
+            subs_res = admin_client.table("subscriptions").select("*").execute()
+            
             if subs_res.data:
                 subs_df = pd.DataFrame(subs_res.data)
-                st.dataframe(subs_df[["user_id", "plan", "status"]], hide_index=True, use_container_width=True)
+                
+                # Obtener emails de settings
+                try:
+                    settings_res = admin_client.table("settings").select("user_id, company_email, company_name").execute()
+                    settings_dict = {
+                        s["user_id"]: {
+                            "email": s.get("company_email", ""),
+                            "nombre": s.get("company_name", "")
+                        } for s in settings_res.data
+                    } if settings_res.data else {}
+                except Exception:
+                    settings_dict = {}
+                
+                # Agregar email al DataFrame
+                subs_df["email"] = subs_df["user_id"].apply(lambda x: settings_dict.get(x, {}).get("email", "N/A"))
+                subs_df["nombre"] = subs_df["user_id"].apply(lambda x: settings_dict.get(x, {}).get("nombre", "N/A"))
+                
+                # Resumen
+                total_activas = len(subs_df[subs_df["status"] == "active"])
+                total_trialing = len(subs_df[subs_df["status"] == "trialing"])
+                total_past_due = len(subs_df[subs_df["status"] == "past_due"])
+                total_canceled = len(subs_df[subs_df["status"] == "cancelled"])
+                
+                col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+                col_s1.metric("✅ Activas", total_activas)
+                col_s2.metric("🎁 Prueba", total_trialing)
+                col_s3.metric("⚠️ Atrasadas", total_past_due)
+                col_s4.metric("❌ Canceladas", total_canceled)
+                
+                if total_past_due > 0:
+                    st.error(f"🚨 {total_past_due} usuarios con pagos atrasados")
+                
+                st.markdown("---")
+                
+                # Mostrar tabla con email en vez de UUID
+                subs_display = subs_df[["email", "nombre", "plan", "status"]].copy()
+                subs_display.columns = ["Email", "Nombre", "Plan", "Estado"]
+                st.dataframe(subs_display, hide_index=True, use_container_width=True)
+            else:
+                st.info("No hay suscripciones registradas.")
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"Error al cargar suscripciones: {e}")
     
+    # ════════════════════════════════════════════════════════════
+    # TAB 4: LOGS (CORREGIDO - admin_client)
+    # ════════════════════════════════════════════════════════════
     with tab_logs:
-        st.subheader("⚠️ Logs")
+        st.subheader("⚠️ Monitor de Logs")
+        
         col_l1, col_l2 = st.columns(2)
+        
         with col_l1:
             st.markdown("### Errores FacturaE")
             try:
-                logs_res = supabase.table("error_logs").select("*").order("created_at", desc=True).limit(50).execute()
+                logs_res = admin_client.table("error_logs").select("*").order("created_at", desc=True).limit(50).execute()
                 if logs_res.data:
                     logs_df = pd.DataFrame(logs_res.data)
-                    st.dataframe(logs_df[["created_at", "user_id", "error_message"]], hide_index=True, use_container_width=True)
+                    logs_df["created_at"] = pd.to_datetime(logs_df["created_at"]).dt.strftime("%d/%m/%Y %H:%M")
+                    st.dataframe(logs_df[["created_at", "user_id", "invoice_number", "error_message"]], hide_index=True, use_container_width=True)
                 else:
-                    st.info("Sin errores.")
-            except Exception:
-                st.info("Tabla error_logs no disponible.")
+                    st.info("Sin errores registrados.")
+            except Exception as e:
+                st.error(f"Error al cargar error_logs: {e}")
+        
         with col_l2:
             st.markdown("### Auditoría Admin")
             try:
-                audit_res = supabase.table("admin_actions").select("*").order("created_at", desc=True).limit(50).execute()
+                audit_res = admin_client.table("admin_actions").select("*").order("created_at", desc=True).limit(50).execute()
                 if audit_res.data:
                     audit_df = pd.DataFrame(audit_res.data)
-                    st.dataframe(audit_df[["created_at", "user_id", "action_type", "action_details"]], hide_index=True, use_container_width=True)
+                    audit_df["created_at"] = pd.to_datetime(audit_df["created_at"]).dt.strftime("%d/%m/%Y %H:%M")
+                    st.dataframe(audit_df[["created_at", "admin_id", "user_id", "action_type", "action_details"]], hide_index=True, use_container_width=True)
                 else:
-                    st.info("Sin acciones.")
-            except Exception:
-                st.info("Tabla admin_actions no disponible.")
-
+                    st.info("Sin acciones registradas.")
+            except Exception as e:
+                st.error(f"Error al cargar admin_actions: {e}")
 # ════════════════════════════════════════════════════════════
 # SUSCRIPCIÓN (COMPLETA)
 # ════════════════════════════════════════════════════════════
