@@ -6,6 +6,7 @@ import matplotlib.ticker as mticker
 from datetime import datetime, date, timedelta
 import json
 import time
+import io
 
 # Validación
 from validators import validar_nif_cif, validar_iban
@@ -479,7 +480,8 @@ elif menu == "👥 Clientes":
         st.dataframe(clientes_display, hide_index=True, use_container_width=True)
     else:
         st.info("No hay clientes registrados.")
-        # ════════════════════════════════════════════════════════════
+
+# ════════════════════════════════════════════════════════════
 # PROVEEDORES
 # ════════════════════════════════════════════════════════════
 elif menu == "🤝 Proveedores":
@@ -812,8 +814,7 @@ elif menu == "📦 Productos":
         st.dataframe(productos_display, hide_index=True, use_container_width=True)
     else:
         st.info("No hay productos en el catálogo.")
-
-# ════════════════════════════════════════════════════════════
+        # ════════════════════════════════════════════════════════════
 # VENTAS
 # ════════════════════════════════════════════════════════════
 elif menu == "💰 Ventas":
@@ -1465,7 +1466,8 @@ elif menu == "🛒 Compras":
                             st.error(f"Error: {e}")
     else:
         st.info("No hay gastos registrados.")
-        # ════════════════════════════════════════════════════════════
+
+# ════════════════════════════════════════════════════════════
 # FACTURACIÓN RECURRENTE
 # ════════════════════════════════════════════════════════════
 elif menu == "🔄 Facturación recurrente":
@@ -1551,31 +1553,180 @@ elif menu == "🔄 Facturación recurrente":
             st.error(f"Error al generar facturas recurrentes: {e}")
 
 # ════════════════════════════════════════════════════════════
-# LIBRO CONTABLE GENERAL
+# LIBRO CONTABLE GENERAL (MEJORADO)
 # ════════════════════════════════════════════════════════════
 elif menu == "📖 Libro Contable General":
-    st.title("Libro Registro")
-    mes = st.selectbox("Mes", LISTA_MESES, index=datetime.now().month - 1)
+    st.title("📖 Libro Registro")
+    
+    # Cargar datos
     inv = get_invoices(user_id)
     exp = get_expenses(user_id)
+    
+    # Preparar datos
     if not inv.empty:
+        inv["date_dt"] = pd.to_datetime(inv["date"], errors="coerce")
+        inv["year"] = inv["date_dt"].dt.year
         inv["tipo"] = "Venta"
         inv.rename(columns={"invoice_number": "numero"}, inplace=True)
+        if "irpf_amount" not in inv.columns:
+            inv["irpf_amount"] = 0.0
+    
     if not exp.empty:
+        exp["date_dt"] = pd.to_datetime(exp["date"], errors="coerce")
+        exp["year"] = exp["date_dt"].dt.year
         exp["tipo"] = "Gasto"
         exp.rename(columns={"expense_number": "numero"}, inplace=True)
         if "category" in exp.columns:
             exp.rename(columns={"category": "concept"}, inplace=True)
         if "irpf_amount" not in exp.columns:
-            exp["irpf_amount"] = 0
-    df = pd.concat([inv, exp], ignore_index=True)
-    if not df.empty:
-        df = df[df["month"] == mes]
-        st.dataframe(df[["numero", "date", "concept", "base_amount", "total", "tipo"]], width='stretch')
-    else:
-        st.info("No hay movimientos en este mes.")
-
-# ════════════════════════════════════════════════════════════
+            exp["irpf_amount"] = 0.0
+    
+    # ============================================================
+    # FILTROS DE PERIODO (Año y Mes en línea)
+    # ============================================================
+    st.subheader("🔍 Filtros de Período")
+    col_f1, col_f2 = st.columns(2)
+    
+    with col_f1:
+        anios_disponibles = set()
+        if not inv.empty:
+            anios_disponibles.update(inv["year"].dropna().unique())
+        if not exp.empty:
+            anios_disponibles.update(exp["year"].dropna().unique())
+        
+        if not anios_disponibles:
+            anios_disponibles = {date.today().year}
+        
+        anios_disponibles = sorted(anios_disponibles, reverse=True)
+        anio_seleccionado = st.selectbox("📅 Año", anios_disponibles, index=0)
+    
+    with col_f2:
+        mes_seleccionado = st.selectbox("📆 Mes", LISTA_MESES, index=datetime.now().month - 1)
+    
+    # Filtrar por año y mes
+    inv_filtrado = pd.DataFrame()
+    exp_filtrado = pd.DataFrame()
+    
+    if not inv.empty:
+        inv_filtrado = inv[
+            (inv["year"] == anio_seleccionado) & 
+            (inv["month"] == mes_seleccionado)
+        ].copy()
+    
+    if not exp.empty:
+        exp_filtrado = exp[
+            (exp["year"] == anio_seleccionado) & 
+            (exp["month"] == mes_seleccionado)
+        ].copy()
+    
+    # Unir
+    df_completo = pd.concat([inv_filtrado, exp_filtrado], ignore_index=True)
+    
+    if df_completo.empty:
+        st.info(f"No hay movimientos en {mes_seleccionado} de {anio_seleccionado}.")
+        st.stop()
+    
+    # ============================================================
+    # MÉTRICAS Y KPIs SUPERIORES
+    # ============================================================
+    st.markdown("---")
+    st.subheader(f"📊 Resumen de {mes_seleccionado} {anio_seleccionado}")
+    
+    total_base = pd.to_numeric(df_completo["base_amount"], errors="coerce").sum()
+    total_iva_repercutido = pd.to_numeric(inv_filtrado["vat_amount"], errors="coerce").sum() if not inv_filtrado.empty else 0.0
+    total_iva_soportado = pd.to_numeric(exp_filtrado["vat_amount"], errors="coerce").sum() if not exp_filtrado.empty else 0.0
+    total_general = pd.to_numeric(df_completo["total"], errors="coerce").sum()
+    num_registros = len(df_completo)
+    
+    col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+    col_m1.metric("💰 Total Base Imponible", money(total_base))
+    col_m2.metric("📄 IVA Repercutido", money(total_iva_repercutido))
+    col_m3.metric("🧾 IVA Soportado", money(total_iva_soportado))
+    col_m4.metric("📊 Total General", money(total_general))
+    
+    col_m5, col_m6 = st.columns(2)
+    col_m5.metric("📋 Nº de Registros", num_registros)
+    col_m6.metric("IVA Neto", money(total_iva_repercutido - total_iva_soportado))
+    
+    # ============================================================
+    # EXPORTACIÓN A EXCEL
+    # ============================================================
+    st.markdown("---")
+    
+    # Preparar DataFrame para mostrar y exportar
+    df_display = df_completo.copy()
+    
+    # Columnas a mostrar
+    columnas_mostrar = ["numero", "date_dt", "concept", "base_amount", "vat_amount", "total", "tipo"]
+    
+    # Verificar columnas existentes
+    for col in columnas_mostrar:
+        if col not in df_display.columns:
+            df_display[col] = ""
+    
+    df_display = df_display[columnas_mostrar].copy()
+    df_display.columns = ["numero", "date", "concept", "base_amount", "vat_amount", "total", "tipo"]
+    
+    # Formatear fecha
+    df_display["date"] = pd.to_datetime(df_display["date"], errors="coerce")
+    
+    # Configuración de columnas
+    column_config = {
+        "numero": st.column_config.TextColumn("Nº Factura", width="small"),
+        "date": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY", width="small"),
+        "concept": st.column_config.TextColumn("Concepto", width="large"),
+        "base_amount": st.column_config.NumberColumn("Base Imponible", format="%.2f €"),
+        "vat_amount": st.column_config.NumberColumn("Cuota IVA", format="%.2f €"),
+        "total": st.column_config.NumberColumn("Total", format="%.2f €"),
+        "tipo": st.column_config.TextColumn("Tipo", width="small"),
+    }
+    
+    st.subheader("📋 Registros del Período")
+    st.dataframe(
+        df_display,
+        hide_index=True,
+        use_container_width=True,
+        column_config=column_config
+    )
+    
+    # ============================================================
+    # EXPORTAR A EXCEL
+    # ============================================================
+    # Crear archivo Excel en memoria
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # Hoja de resumen
+        resumen_data = {
+            "Concepto": ["Total Base Imponible", "IVA Repercutido", "IVA Soportado", "IVA Neto", "Total General", "Nº Registros"],
+            "Importe": [total_base, total_iva_repercutido, total_iva_soportado, total_iva_repercutido - total_iva_soportado, total_general, num_registros]
+        }
+        resumen_df = pd.DataFrame(resumen_data)
+        resumen_df.to_excel(writer, sheet_name="Resumen", index=False)
+        
+        # Hoja de registros
+        export_df = df_completo.copy()
+        export_df["date"] = pd.to_datetime(export_df["date_dt"], errors="coerce").dt.strftime("%d/%m/%Y")
+        
+        # Seleccionar columnas para exportar
+        columnas_export = ["numero", "date", "concept", "base_amount", "vat_amount", "total", "tipo"]
+        for col in columnas_export:
+            if col not in export_df.columns:
+                export_df[col] = ""
+        
+        export_df = export_df[columnas_export].copy()
+        export_df.columns = ["Nº Factura", "Fecha", "Concepto", "Base Imponible", "Cuota IVA", "Total", "Tipo"]
+        
+        export_df.to_excel(writer, sheet_name="Registros", index=False)
+    
+    excel_bytes = output.getvalue()
+    
+    st.download_button(
+        "⬇️ Exportar a Excel (.xlsx)",
+        excel_bytes,
+        f"Libro_Registro_{mes_seleccionado}_{anio_seleccionado}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="descargar_excel_libro"
+        # ════════════════════════════════════════════════════════════
 # CONTABILIDAD
 # ════════════════════════════════════════════════════════════
 elif menu == "📒 Contabilidad":
@@ -1920,65 +2071,263 @@ elif menu == "🏦 Conciliación Bancaria":
         st.info("No hay movimientos bancarios.")
 
 # ════════════════════════════════════════════════════════════
-# DASHBOARDS
+# DASHBOARDS MEJORADO
 # ════════════════════════════════════════════════════════════
 elif menu == "📊 Dashboards":
     st.title("📊 Dashboards de Facturación")
+    
     invoices = get_invoices(user_id)
-    if invoices.empty:
-        st.info("No hay facturas para mostrar.")
-    else:
+    expenses = get_expenses(user_id)
+    
+    if invoices.empty and expenses.empty:
+        st.info("No hay datos para mostrar. Crea facturas y gastos primero.")
+        st.stop()
+    
+    # Preparar datos
+    if not invoices.empty:
         invoices["date_dt"] = pd.to_datetime(invoices["date"], errors="coerce")
         invoices["year"] = invoices["date_dt"].dt.year
         invoices["month_name"] = invoices["date_dt"].dt.month.apply(lambda x: LISTA_MESES[x-1] if 1 <= x <= 12 else "Desconocido")
         invoices["month_num"] = invoices["date_dt"].dt.month
-        col1, col2 = st.columns(2)
-        with col1:
-            years_disponibles = sorted(invoices["year"].dropna().unique(), reverse=True)
-            year_seleccionado = st.selectbox("📅 Año", years_disponibles, index=0 if years_disponibles else 0)
-        with col2:
-            opciones_meses = ["Todos"] + LISTA_MESES
-            mes_seleccionado = st.selectbox("📆 Mes", opciones_meses, index=0)
-        data_filtrada = invoices[invoices["year"] == year_seleccionado].copy()
-        if mes_seleccionado != "Todos":
-            data_filtrada = data_filtrada[data_filtrada["month_name"] == mes_seleccionado]
-        if data_filtrada.empty:
-            st.warning("No hay facturas en el período seleccionado.")
+    
+    if not expenses.empty:
+        expenses["date_dt"] = pd.to_datetime(expenses["date"], errors="coerce")
+        expenses["year"] = expenses["date_dt"].dt.year
+        expenses["month_name"] = expenses["date_dt"].dt.month.apply(lambda x: LISTA_MESES[x-1] if 1 <= x <= 12 else "Desconocido")
+        expenses["month_num"] = expenses["date_dt"].dt.month
+    
+    # Filtros
+    st.subheader("🔍 Filtros")
+    col_f1, col_f2, col_f3 = st.columns(3)
+    
+    with col_f1:
+        anios_disponibles = set()
+        if not invoices.empty:
+            anios_disponibles.update(invoices["year"].dropna().unique())
+        if not expenses.empty:
+            anios_disponibles.update(expenses["year"].dropna().unique())
+        anios_disponibles = sorted(anios_disponibles, reverse=True)
+        year_seleccionado = st.selectbox("📅 Año", anios_disponibles, index=0 if anios_disponibles else 0)
+    
+    with col_f2:
+        opciones_meses = ["Todos"] + LISTA_MESES
+        mes_seleccionado = st.selectbox("📆 Mes", opciones_meses, index=0)
+    
+    with col_f3:
+        tipo_grafico = st.selectbox("📈 Tipo de gráfico", ["Barras", "Líneas", "Área"], index=0)
+    
+    # Filtrar datos
+    data_inv = invoices[invoices["year"] == year_seleccionado].copy() if not invoices.empty else pd.DataFrame()
+    data_exp = expenses[expenses["year"] == year_seleccionado].copy() if not expenses.empty else pd.DataFrame()
+    
+    if mes_seleccionado != "Todos":
+        if not data_inv.empty:
+            data_inv = data_inv[data_inv["month_name"] == mes_seleccionado]
+        if not data_exp.empty:
+            data_exp = data_exp[data_exp["month_name"] == mes_seleccionado]
+    
+    if data_inv.empty and data_exp.empty:
+        st.warning("No hay datos en el período seleccionado.")
+        st.stop()
+    
+    # KPIs
+    st.markdown("---")
+    st.subheader("📊 Indicadores Clave")
+    
+    total_ingresos = data_inv["total"].sum() if not data_inv.empty else 0.0
+    total_gastos = data_exp["total"].sum() if not data_exp.empty else 0.0
+    num_facturas = len(data_inv) if not data_inv.empty else 0
+    beneficio = total_ingresos - total_gastos
+    promedio_factura = total_ingresos / num_facturas if num_facturas > 0 else 0
+    
+    iva_repercutido = data_inv["vat_amount"].sum() if not data_inv.empty else 0.0
+    iva_soportado = data_exp["vat_amount"].sum() if not data_exp.empty else 0.0
+    iva_resultado = iva_repercutido - iva_soportado
+    
+    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+    kpi1.metric("💰 Total Ingresos", money(total_ingresos))
+    kpi2.metric("📄 Facturas Emitidas", num_facturas)
+    kpi3.metric("🧾 Gastos Totales", money(total_gastos))
+    kpi4.metric("📊 Promedio por Factura", money(promedio_factura))
+    
+    kpi5, kpi6, kpi7, kpi8 = st.columns(4)
+    kpi5.metric("🔥 Beneficio", money(beneficio))
+    kpi6.metric("IVA Repercutido", money(iva_repercutido))
+    kpi7.metric("IVA Soportado", money(iva_soportado))
+    kpi8.metric("IVA Resultado", money(iva_resultado))
+    
+    # Gráfico principal
+    st.markdown("---")
+    st.subheader("📈 Comparativa Ingresos vs Gastos")
+    
+    if mes_seleccionado == "Todos":
+        if not data_inv.empty:
+            ingresos_mensuales = data_inv.groupby(["month_num", "month_name"])["total"].sum().reset_index().sort_values("month_num")
         else:
-            total_ingresos = data_filtrada["total"].sum()
-            num_facturas = len(data_filtrada)
-            promedio = total_ingresos / num_facturas if num_facturas > 0 else 0
-            kpi1, kpi2, kpi3 = st.columns(3)
-            kpi1.metric("💰 Total Ingresos", money(total_ingresos))
-            kpi2.metric("📄 Facturas Emitidas", num_facturas)
-            kpi3.metric("📊 Promedio por Venta", money(promedio))
-            st.markdown("---")
-            if mes_seleccionado == "Todos":
-                ingresos_mensuales = data_filtrada.groupby(["month_num", "month_name"])["total"].sum().reset_index()
-                ingresos_mensuales = ingresos_mensuales.sort_values("month_num")
-                x_labels = ingresos_mensuales["month_name"].tolist()
-                valores = ingresos_mensuales["total"].tolist()
-                titulo = f"Ingresos en {year_seleccionado}"
+            ingresos_mensuales = pd.DataFrame(columns=["month_num", "month_name", "total"])
+        
+        if not data_exp.empty:
+            gastos_mensuales = data_exp.groupby(["month_num", "month_name"])["total"].sum().reset_index().sort_values("month_num")
+        else:
+            gastos_mensuales = pd.DataFrame(columns=["month_num", "month_name", "total"])
+        
+        meses_todos = pd.DataFrame({"month_num": range(1, 13), "month_name": LISTA_MESES})
+        df_grafico = meses_todos.merge(
+            ingresos_mensuales[["month_num", "total"]].rename(columns={"total": "ingresos"}),
+            on="month_num", how="left"
+        ).merge(
+            gastos_mensuales[["month_num", "total"]].rename(columns={"total": "gastos"}),
+            on="month_num", how="left"
+        ).fillna(0)
+        x_labels = df_grafico["month_name"].tolist()
+        titulo = f"Ingresos vs Gastos en {year_seleccionado}"
+    else:
+        if not data_inv.empty:
+            data_inv["day"] = data_inv["date_dt"].dt.day
+            ingresos_diarios = data_inv.groupby("day")["total"].sum().reset_index()
+        else:
+            ingresos_diarios = pd.DataFrame(columns=["day", "total"])
+        
+        if not data_exp.empty:
+            data_exp["day"] = data_exp["date_dt"].dt.day
+            gastos_diarios = data_exp.groupby("day")["total"].sum().reset_index()
+        else:
+            gastos_diarios = pd.DataFrame(columns=["day", "total"])
+        
+        dias_todos = pd.DataFrame({"day": range(1, 32)})
+        df_grafico = dias_todos.merge(
+            ingresos_diarios.rename(columns={"total": "ingresos"}),
+            on="day", how="left"
+        ).merge(
+            gastos_diarios.rename(columns={"total": "gastos"}),
+            on="day", how="left"
+        ).fillna(0)
+        x_labels = [str(d) for d in df_grafico["day"]]
+        titulo = f"Ingresos vs Gastos en {mes_seleccionado} {year_seleccionado}"
+    
+    if not df_grafico.empty and x_labels:
+        fig, ax = plt.subplots(figsize=(12, 6))
+        x_pos = range(len(x_labels))
+        width = 0.35
+        
+        if tipo_grafico == "Barras":
+            ax.bar([p - width/2 for p in x_pos], df_grafico["ingresos"], width, label="Ingresos", color="#10B981", edgecolor="white")
+            ax.bar([p + width/2 for p in x_pos], df_grafico["gastos"], width, label="Gastos", color="#EF4444", edgecolor="white")
+        elif tipo_grafico == "Líneas":
+            ax.plot(x_pos, df_grafico["ingresos"], marker="o", label="Ingresos", color="#10B981", linewidth=2)
+            ax.plot(x_pos, df_grafico["gastos"], marker="s", label="Gastos", color="#EF4444", linewidth=2)
+        else:
+            ax.fill_between(x_pos, df_grafico["ingresos"], alpha=0.5, label="Ingresos", color="#10B981")
+            ax.fill_between(x_pos, df_grafico["gastos"], alpha=0.5, label="Gastos", color="#EF4444")
+        
+        ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:,.0f} €"))
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(x_labels, rotation=45, ha="right")
+        ax.set_ylabel("Importe (€)")
+        ax.set_title(titulo, fontsize=16, fontweight="bold", color="#0F172A")
+        ax.legend(loc="upper right")
+        ax.grid(axis="y", linestyle="--", alpha=0.7)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        fig.tight_layout(pad=2)
+        st.pyplot(fig)
+    
+    # Gráficos secundarios
+    st.markdown("---")
+    col_g1, col_g2 = st.columns(2)
+    
+    with col_g1:
+        st.subheader("🏆 Top Clientes")
+        if not data_inv.empty and "client_name" in data_inv.columns:
+            top_clientes = data_inv.groupby("client_name")["total"].sum().sort_values(ascending=False).head(5)
+            if not top_clientes.empty:
+                fig2, ax2 = plt.subplots(figsize=(8, 5))
+                ax2.barh(range(len(top_clientes)), top_clientes.values, color="#1E3A8A")
+                ax2.set_yticks(range(len(top_clientes)))
+                ax2.set_yticklabels(top_clientes.index, fontsize=10)
+                ax2.invert_yaxis()
+                ax2.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:,.0f} €"))
+                ax2.set_title("Top 5 Clientes por Facturación", fontweight="bold")
+                ax2.grid(axis="x", linestyle="--", alpha=0.7)
+                ax2.spines["top"].set_visible(False)
+                ax2.spines["right"].set_visible(False)
+                fig2.tight_layout()
+                st.pyplot(fig2)
             else:
-                data_filtrada["day"] = data_filtrada["date_dt"].dt.day
-                ingresos_diarios = data_filtrada.groupby("day")["total"].sum().reset_index()
-                x_labels = [str(d) for d in ingresos_diarios["day"]]
-                valores = ingresos_diarios["total"].tolist()
-                titulo = f"Ingresos diarios en {mes_seleccionado} {year_seleccionado}"
-            if valores:
-                fig, ax = plt.subplots(figsize=(10, 5))
-                ax.bar(range(len(valores)), valores, color="#1E3A8A", edgecolor="white")
-                ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:,.0f} €"))
-                ax.set_xticks(range(len(x_labels)))
-                ax.set_xticklabels(x_labels, rotation=45, ha="right")
-                ax.set_ylabel("Total (€)")
-                ax.set_title(titulo, fontsize=16, fontweight="bold", color="#0F172A")
-                ax.grid(axis="y", linestyle="--", alpha=0.7)
-                ax.spines["top"].set_visible(False)
-                ax.spines["right"].set_visible(False)
-                ax.spines["left"].set_visible(False)
-                fig.tight_layout(pad=2)
-                st.pyplot(fig)
+                st.info("No hay datos de clientes.")
+        else:
+            st.info("No hay datos de clientes.")
+    
+    with col_g2:
+        st.subheader("📊 Distribución de Estados")
+        if not data_inv.empty and "status" in data_inv.columns:
+            estados = data_inv["status"].value_counts()
+            if not estados.empty:
+                fig3, ax3 = plt.subplots(figsize=(8, 5))
+                colores = {
+                    "pendiente": "#F59E0B",
+                    "pagada": "#10B981",
+                    "vencida": "#EF4444",
+                    "anulada": "#6B7280",
+                    "rectificada": "#3B82F6"
+                }
+                colors_list = [colores.get(e, "#6B7280") for e in estados.index]
+                ax3.pie(estados.values, labels=estados.index, autopct='%1.1f%%', colors=colors_list, startangle=90)
+                ax3.set_title("Estado de Facturas", fontweight="bold")
+                fig3.tight_layout()
+                st.pyplot(fig3)
+            else:
+                st.info("No hay datos de estados.")
+        else:
+            st.info("No hay datos de estados.")
+    
+    # Gastos por categoría
+    st.markdown("---")
+    st.subheader("📊 Gastos por Categoría")
+    
+    if not data_exp.empty and "expense_type" in data_exp.columns:
+        gastos_categoria = data_exp.groupby("expense_type")["total"].sum().sort_values(ascending=False)
+        if not gastos_categoria.empty:
+            fig4, ax4 = plt.subplots(figsize=(10, 5))
+            ax4.bar(range(len(gastos_categoria)), gastos_categoria.values, color="#8B5CF6", edgecolor="white")
+            ax4.set_xticks(range(len(gastos_categoria)))
+            ax4.set_xticklabels(gastos_categoria.index, rotation=45, ha="right")
+            ax4.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:,.0f} €"))
+            ax4.set_title("Gastos por Categoría", fontsize=14, fontweight="bold")
+            ax4.grid(axis="y", linestyle="--", alpha=0.7)
+            ax4.spines["top"].set_visible(False)
+            ax4.spines["right"].set_visible(False)
+            fig4.tight_layout()
+            st.pyplot(fig4)
+        else:
+            st.info("No hay gastos categorizados.")
+    else:
+        st.info("No hay datos de gastos.")
+    
+    # Tabla resumen mensual
+    st.markdown("---")
+    st.subheader("📋 Resumen Mensual")
+    
+    if not data_inv.empty or not data_exp.empty:
+        resumen_meses = []
+        for i, mes_nombre in enumerate(LISTA_MESES, 1):
+            ing_mes = data_inv[data_inv["month_num"] == i]["total"].sum() if not data_inv.empty else 0
+            gas_mes = data_exp[data_exp["month_num"] == i]["total"].sum() if not data_exp.empty else 0
+            ben_mes = ing_mes - gas_mes
+            resumen_meses.append({
+                "Mes": mes_nombre,
+                "Ingresos": ing_mes,
+                "Gastos": gas_mes,
+                "Beneficio": ben_mes
+            })
+        
+        resumen_df = pd.DataFrame(resumen_meses)
+        resumen_display = resumen_df.copy()
+        resumen_display["Ingresos"] = resumen_display["Ingresos"].apply(lambda x: f"{x:,.2f} €")
+        resumen_display["Gastos"] = resumen_display["Gastos"].apply(lambda x: f"{x:,.2f} €")
+        resumen_display["Beneficio"] = resumen_display["Beneficio"].apply(lambda x: f"{x:,.2f} €")
+        
+        st.dataframe(resumen_display, hide_index=True, use_container_width=True)
 
 # ════════════════════════════════════════════════════════════
 # PRESUPUESTOS
@@ -2513,3 +2862,5 @@ elif menu == "⚙️ Configuración":
         pdf_bytes = make_invoice_pdf_from_template(ejemplo_invoice, ejemplo_client, ejemplo_company, ejemplo_lineas)
         if pdf_bytes:
             st.download_button("Descargar factura de prueba", pdf_bytes, "prueba_factura.pdf", "application/pdf")
+)
+        
