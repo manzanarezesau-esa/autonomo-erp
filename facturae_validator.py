@@ -5,9 +5,8 @@ from lxml import etree
 # ============================================================
 # VALIDACIÓN SIMPLIFICADA DE FACTURAE v3.2.2
 # ============================================================
-# NOTA: El XSD completo de FacturaE v3.2.2 es muy extenso.
-# Por ahora usamos una validación manual de campos obligatorios.
-# Para validación oficial completa, usar la sede electrónica de la AEAT.
+# Valida campos obligatorios según la estructura CORRECTA del XSD.
+# Ya NO usa TaxIdentificationType - usa PersonTypeCode y ResidenceTypeCode.
 # ============================================================
 
 def validar_facturae_completo(xml_str):
@@ -26,22 +25,38 @@ def validar_facturae_completo(xml_str):
         # Namespace de FacturaE
         ns = "{http://www.facturae.gob.es/formato/Versiones/Facturaev3_2_2.xml}"
         
-        # Campos obligatorios a comprobar
+        # ============================================================
+        # CAMPOS OBLIGATORIOS - ESTRUCTURA CORRECTA según XSD
+        # ============================================================
         campos_obligatorios = {
+            # FileHeader
             "SchemaVersion": "Versión del esquema",
             "Modality": "Modalidad",
             "InvoiceIssuerType": "Tipo de emisor",
             "BatchIdentifier": "Identificador del lote",
             "InvoicesCount": "Número de facturas",
             "InvoiceCurrencyCode": "Código de moneda",
-            "TaxIdentificationType": "Tipo de identificación fiscal",
+            
+            # TaxIdentification - CORREGIDO
+            "PersonTypeCode": "Tipo de persona (F/J)",
+            "ResidenceTypeCode": "Código de residencia",
             "TaxIdentificationNumber": "Número de identificación fiscal",
+            
+            # InvoiceHeader
             "InvoiceNumber": "Número de factura",
+            "InvoiceDocumentType": "Tipo de documento",
             "InvoiceClass": "Clase de factura",
+            
+            # InvoiceIssueData
             "IssueDate": "Fecha de expedición",
+            "LanguageCode": "Código de idioma",
+            
+            # InvoiceTotals
             "TotalGrossAmount": "Base imponible",
             "TotalTaxOutputs": "IVA repercutido",
             "InvoiceTotal": "Total de la factura",
+            
+            # Items
             "ItemDescription": "Descripción de línea",
             "Quantity": "Cantidad",
             "UnitPriceWithoutTax": "Precio unitario sin impuestos",
@@ -53,34 +68,137 @@ def validar_facturae_completo(xml_str):
             if elemento is None or not elemento.text or not elemento.text.strip():
                 campos_faltantes.append(f"{descripcion} ({campo})")
         
-        # Verificar estructura básica
+        # ============================================================
+        # VERIFICACIÓN DE ESTRUCTURA
+        # ============================================================
+        
+        # FileHeader
         file_header = xml_doc.find(f".//{ns}FileHeader")
         if file_header is None:
             errores.append("Falta el bloque FileHeader")
         
+        # Batch
+        batch = xml_doc.find(f".//{ns}FileHeader/{ns}Batch")
+        if batch is None:
+            errores.append("Falta el bloque Batch dentro de FileHeader")
+        
+        # Parties
         parties = xml_doc.find(f".//{ns}Parties")
         if parties is None:
             errores.append("Falta el bloque Parties")
         
+        # Invoices
         invoices = xml_doc.find(f".//{ns}Invoices")
         if invoices is None:
             errores.append("Falta el bloque Invoices")
         
-        # Verificar TaxIdentification en Seller y Buyer
-        seller_tax = xml_doc.find(f".//{ns}SellerParty/{ns}TaxIdentification")
-        if seller_tax is None:
-            errores.append("Falta TaxIdentification del emisor")
+        # ============================================================
+        # VERIFICACIÓN DE TAX IDENTIFICATION EN SELLER Y BUYER
+        # ============================================================
         
-        buyer_tax = xml_doc.find(f".//{ns}BuyerParty/{ns}TaxIdentification")
-        if buyer_tax is None:
-            errores.append("Falta TaxIdentification del receptor")
+        # Seller Party
+        seller_party = xml_doc.find(f".//{ns}SellerParty")
+        if seller_party is None:
+            errores.append("Falta SellerParty")
+        else:
+            seller_tax = seller_party.find(f"{ns}TaxIdentification")
+            if seller_tax is None:
+                errores.append("Falta TaxIdentification del emisor")
+            else:
+                # Verificar PersonTypeCode
+                person_type = seller_tax.find(f"{ns}PersonTypeCode")
+                if person_type is None or not person_type.text:
+                    errores.append("Falta PersonTypeCode del emisor")
+                
+                # Verificar ResidenceTypeCode
+                residence_type = seller_tax.find(f"{ns}ResidenceTypeCode")
+                if residence_type is None or not residence_type.text:
+                    errores.append("Falta ResidenceTypeCode del emisor")
+                
+                # Verificar TaxIdentificationNumber
+                tax_number = seller_tax.find(f"{ns}TaxIdentificationNumber")
+                if tax_number is None or not tax_number.text:
+                    errores.append("Falta TaxIdentificationNumber del emisor")
+            
+            # Verificar que tenga Individual o LegalEntity
+            seller_individual = seller_party.find(f"{ns}Individual")
+            seller_legal = seller_party.find(f"{ns}LegalEntity")
+            if seller_individual is None and seller_legal is None:
+                errores.append("El emisor debe tener Individual o LegalEntity")
+            
+            # Si es Individual, verificar FirstSurname
+            if seller_individual is not None:
+                seller_first_surname = seller_individual.find(f"{ns}FirstSurname")
+                if seller_first_surname is None or not seller_first_surname.text:
+                    errores.append("Falta FirstSurname en Individual del emisor")
         
-        # Verificar que hay al menos 1 línea de factura
+        # Buyer Party
+        buyer_party = xml_doc.find(f".//{ns}BuyerParty")
+        if buyer_party is None:
+            errores.append("Falta BuyerParty")
+        else:
+            buyer_tax = buyer_party.find(f"{ns}TaxIdentification")
+            if buyer_tax is None:
+                errores.append("Falta TaxIdentification del receptor")
+            else:
+                person_type = buyer_tax.find(f"{ns}PersonTypeCode")
+                if person_type is None or not person_type.text:
+                    errores.append("Falta PersonTypeCode del receptor")
+                
+                residence_type = buyer_tax.find(f"{ns}ResidenceTypeCode")
+                if residence_type is None or not residence_type.text:
+                    errores.append("Falta ResidenceTypeCode del receptor")
+                
+                tax_number = buyer_tax.find(f"{ns}TaxIdentificationNumber")
+                if tax_number is None or not tax_number.text:
+                    errores.append("Falta TaxIdentificationNumber del receptor")
+            
+            buyer_individual = buyer_party.find(f"{ns}Individual")
+            buyer_legal = buyer_party.find(f"{ns}LegalEntity")
+            if buyer_individual is None and buyer_legal is None:
+                errores.append("El receptor debe tener Individual o LegalEntity")
+            
+            if buyer_individual is not None:
+                buyer_first_surname = buyer_individual.find(f"{ns}FirstSurname")
+                if buyer_first_surname is None or not buyer_first_surname.text:
+                    errores.append("Falta FirstSurname en Individual del receptor")
+        
+        # ============================================================
+        # VERIFICACIÓN DE INVOICE HEADER
+        # ============================================================
+        
+        invoice = xml_doc.find(f".//{ns}Invoice")
+        if invoice is not None:
+            # InvoiceHeader
+            invoice_header = invoice.find(f"{ns}InvoiceHeader")
+            if invoice_header is None:
+                errores.append("Falta InvoiceHeader")
+            else:
+                # InvoiceNumber dentro de InvoiceHeader
+                invoice_number = invoice_header.find(f"{ns}InvoiceNumber")
+                if invoice_number is None or not invoice_number.text:
+                    errores.append("Falta InvoiceNumber dentro de InvoiceHeader")
+                
+                # InvoiceDocumentType
+                doc_type = invoice_header.find(f"{ns}InvoiceDocumentType")
+                if doc_type is None or not doc_type.text:
+                    errores.append("Falta InvoiceDocumentType dentro de InvoiceHeader")
+                
+                # InvoiceClass
+                invoice_class = invoice_header.find(f"{ns}InvoiceClass")
+                if invoice_class is None or not invoice_class.text:
+                    errores.append("Falta InvoiceClass dentro de InvoiceHeader")
+        
+        # ============================================================
+        # VERIFICACIÓN DE LÍNEAS DE FACTURA
+        # ============================================================
         invoice_lines = xml_doc.findall(f".//{ns}InvoiceLine")
         if len(invoice_lines) == 0:
             errores.append("No hay líneas de factura")
         
-        # Construir mensaje
+        # ============================================================
+        # CONSTRUIR MENSAJE DE RESULTADO
+        # ============================================================
         mensajes = []
         
         if campos_faltantes:
@@ -94,7 +212,7 @@ def validar_facturae_completo(xml_str):
                 mensajes.append(f"  • {error}")
         
         if not mensajes:
-            return True, "✅ XML válido según validación manual de campos obligatorios FacturaE v3.2.2"
+            return True, "✅ XML válido según validación de campos obligatorios FacturaE v3.2.2"
         
         return False, "\n".join(mensajes)
         
