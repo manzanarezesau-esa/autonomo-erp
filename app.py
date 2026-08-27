@@ -2825,7 +2825,7 @@ with tab_suscripciones:
             st.info("No hay suscripciones registradas.")
     except Exception as e:
         st.error(f"Error al cargar suscripciones: {e}")
-  ════════════════════════════════════════════════════════════
+
     # TAB 4: LOGS (CORREGIDO - admin_client)
     # ════════════════════════════════════════════════════════════
     with tab_logs:
