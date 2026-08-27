@@ -814,7 +814,7 @@ elif menu == "📦 Productos":
         st.dataframe(productos_display, hide_index=True, use_container_width=True)
     else:
         st.info("No hay productos en el catálogo.")
-        # ════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════
 # VENTAS
 # ════════════════════════════════════════════════════════════
 elif menu == "💰 Ventas":
@@ -1726,9 +1726,8 @@ elif menu == "📖 Libro Contable General":
         f"Libro_Registro_{mes_seleccionado}_{anio_seleccionado}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key="descargar_excel_libro"
-    
-)
-    # ════════════════════════════════════════════════════════════
+    )
+# ════════════════════════════════════════════════════════════
 # CONTABILIDAD
 # ════════════════════════════════════════════════════════════
 elif menu == "📒 Contabilidad":
