@@ -10,24 +10,25 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.serialization import pkcs12
 from signxml import XMLSigner, methods
 
-# Lista de servidores TSA
+# Lista de servidores TSA (incluyendo FNMT España)
 TSA_LIST = [
+    "http://servicios.cert.fnmt.es/tsa/postreq.aspx",  # FNMT (España)
     "https://freetsa.org/tsr",
     "http://timestamp.digicert.com",
+    "http://timestamp.sectigo.com",
 ]
 
 TSA_HEADERS = {
     "Content-Type": "application/timestamp-query",
     "Accept": "application/timestamp-reply",
-    "User-Agent": "Mozilla/5.0 HondureformasERP/1.0"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) HondureformasERP/1.0"
 }
 
 
 def crear_timestamp_request(data_to_timestamp):
-    """Crea petición de timestamp RFC 3161 usando hashlib."""
+    """Crea petición de timestamp RFC 3161."""
     digest = hashlib.sha256(data_to_timestamp).digest()
     
-    # OID SHA-256: 2.16.840.1.101.3.4.2.1
     oid_sha256 = bytes([0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01])
     octet_string = bytes([0x04, 0x20]) + digest
     inner_seq = bytes([0x30, len(oid_sha256) + len(octet_string)]) + oid_sha256 + octet_string
@@ -43,34 +44,34 @@ def crear_timestamp_request(data_to_timestamp):
 
 
 def solicitar_timestamp(tsq_bytes):
-    """Solicita timestamp a TSA con verificación de respuesta válida."""
+    """Solicita timestamp a múltiples TSA."""
     for url in TSA_LIST:
         try:
-            response = requests.post(url, data=tsq_bytes, headers=TSA_HEADERS, timeout=15)
+            st.info(f"Intentando TSA: {url}")
+            response = requests.post(
+                url,
+                data=tsq_bytes,
+                headers=TSA_HEADERS,
+                timeout=20
+            )
             
+            # Verificar respuesta válida
             if response.status_code == 200 and len(response.content) > 100:
-                # Verificar que la respuesta NO sea un error
-                # Una respuesta TSA válida empieza con 0x30 (SEQUENCE)
+                # Timestamp token válido empieza con 0x30 (SEQUENCE)
                 if response.content[0] == 0x30:
+                    st.success(f"✅ Timestamp obtenido de: {url}")
                     return response.content
                 else:
-                    st.warning(f"TSA {url} devolvió respuesta no válida. Intentando siguiente...")
+                    st.warning(f"Respuesta no válida de {url} (no es DER)")
             else:
-                st.warning(f"TSA {url} devolvió HTTP {response.status_code} o respuesta corta.")
+                st.warning(f"HTTP {response.status_code} de {url}")
                 
+        except requests.exceptions.Timeout:
+            st.warning(f"Timeout en {url}")
         except Exception as e:
-            st.warning(f"Error en TSA {url}: {str(e)}")
+            st.warning(f"Error en {url}: {str(e)}")
     
     return None
-
-
-def obtener_timestamp(data_to_timestamp):
-    """Obtiene timestamp válido o None."""
-    try:
-        ts_request = crear_timestamp_request(data_to_timestamp)
-        return solicitar_timestamp(ts_request)
-    except Exception:
-        return None
 
 
 def cargar_certificado_p12(p12_content, password_input):
@@ -93,15 +94,12 @@ def cargar_certificado_p12(p12_content, password_input):
 
 def firmar_facturae_xml(xml_input, certificado_p12, password_certificado, usar_timestamp=True):
     """
-    Firma XML FacturaE con XAdES-EPES.
-    Si usar_timestamp=True y el timestamp se obtiene correctamente, añade XAdES-T.
-    Si el timestamp falla, genera XAdES-EPES (sin timestamp) - NUNCA inserta errores.
+    Firma XML con XAdES-EPES o XAdES-T.
+    Si el timestamp falla, genera XAdES-EPES limpio.
     """
     try:
-        # Cargar certificado
         private_key, certificate, _ = cargar_certificado_p12(certificado_p12, password_certificado)
         
-        # Convertir a PEM
         private_key_pem = private_key.private_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PrivateFormat.PKCS8,
@@ -109,17 +107,14 @@ def firmar_facturae_xml(xml_input, certificado_p12, password_certificado, usar_t
         )
         cert_pem = certificate.public_bytes(serialization.Encoding.PEM)
         
-        # Parsear XML
         if isinstance(xml_input, (str, bytes)):
             xml_root = etree.fromstring(xml_input.encode('utf-8') if isinstance(xml_input, str) else xml_input)
         else:
             xml_root = xml_input
         
-        # ID único
         root_id = f"Facturae-{uuid.uuid4().hex[:16]}"
         xml_root.set("Id", root_id)
         
-        # Firmar
         signer = XMLSigner(
             method=methods.enveloped,
             signature_algorithm="rsa-sha256",
@@ -134,47 +129,44 @@ def firmar_facturae_xml(xml_input, certificado_p12, password_certificado, usar_t
             reference_uri=f"#{root_id}"
         )
         
-        # Intentar timestamp SOLO si se solicita
+        # Timestamp opcional
         if usar_timestamp:
-            timestamp_token = None
             try:
                 signed_data = etree.tostring(signed_xml, method='c14n')
-                timestamp_token = obtener_timestamp(signed_data)
-            except Exception:
-                timestamp_token = None
-            
-            if timestamp_token and len(timestamp_token) > 100:
-                # Timestamp VÁLIDO - añadir XAdES-T
-                signature_node = signed_xml.find(".//{http://www.w3.org/2000/09/xmldsig#}Signature")
-                if signature_node is not None:
-                    ns_xades = "http://uri.etsi.org/01903/v1.1.1#"
-                    ns_ds = "http://www.w3.org/2000/09/xmldsig#"
-                    
-                    object_node = etree.SubElement(signature_node, f"{{{ns_ds}}}Object")
-                    
-                    qualifying_props = etree.SubElement(
-                        object_node,
-                        f"{{{ns_xades}}}QualifyingProperties",
-                        Target=f"#{root_id}"
-                    )
-                    
-                    signed_props = etree.SubElement(qualifying_props, f"{{{ns_xades}}}SignedProperties")
-                    signed_sig_props = etree.SubElement(signed_props, f"{{{ns_xades}}}SignedSignatureProperties")
-                    
-                    signing_time = etree.SubElement(signed_sig_props, f"{{{ns_xades}}}SigningTime")
-                    signing_time.text = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-                    
-                    sig_timestamp = etree.SubElement(signed_sig_props, f"{{{ns_xades}}}SignatureTimeStamp")
-                    timestamp_b64 = base64.b64encode(timestamp_token).decode('utf-8')
-                    
-                    encapsulated_ts = etree.SubElement(sig_timestamp, f"{{{ns_xades}}}EncapsulatedTimeStamp")
-                    encapsulated_ts.text = timestamp_b64
-                    
-                    st.success("✅ Firma XAdES-T con timestamp aplicada")
-            else:
-                st.warning("⚠️ No se pudo obtener timestamp válido. Se generará firma XAdES-EPES (sin timestamp).")
+                timestamp_token = solicitar_timestamp(crear_timestamp_request(signed_data))
+                
+                if timestamp_token and len(timestamp_token) > 100:
+                    signature_node = signed_xml.find(".//{http://www.w3.org/2000/09/xmldsig#}Signature")
+                    if signature_node is not None:
+                        ns_xades = "http://uri.etsi.org/01903/v1.1.1#"
+                        ns_ds = "http://www.w3.org/2000/09/xmldsig#"
+                        
+                        object_node = etree.SubElement(signature_node, f"{{{ns_ds}}}Object")
+                        
+                        qualifying_props = etree.SubElement(
+                            object_node,
+                            f"{{{ns_xades}}}QualifyingProperties",
+                            Target=f"#{root_id}"
+                        )
+                        
+                        signed_props = etree.SubElement(qualifying_props, f"{{{ns_xades}}}SignedProperties")
+                        signed_sig_props = etree.SubElement(signed_props, f"{{{ns_xades}}}SignedSignatureProperties")
+                        
+                        signing_time = etree.SubElement(signed_sig_props, f"{{{ns_xades}}}SigningTime")
+                        signing_time.text = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                        
+                        sig_timestamp = etree.SubElement(signed_sig_props, f"{{{ns_xades}}}SignatureTimeStamp")
+                        timestamp_b64 = base64.b64encode(timestamp_token).decode('utf-8')
+                        
+                        encapsulated_ts = etree.SubElement(sig_timestamp, f"{{{ns_xades}}}EncapsulatedTimeStamp")
+                        encapsulated_ts.text = timestamp_b64
+                        
+                        st.success("✅ Firma XAdES-T aplicada")
+                else:
+                    st.warning("⚠️ No se pudo obtener timestamp. Se generó XAdES-EPES (válido sin timestamp).")
+            except Exception as e:
+                st.warning(f"⚠️ Error en timestamp: {str(e)}. Se generó XAdES-EPES.")
         
-        # Convertir a string
         result = etree.tostring(signed_xml, encoding='utf-8', xml_declaration=True, pretty_print=True)
         return result.decode('utf-8')
         
