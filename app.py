@@ -204,6 +204,7 @@ opciones_menu = [
     "📦 Productos",
     "💰 Ventas",
     "🛒 Compras",
+    "👥 Empleados",
     "🔄 Facturación recurrente",
     "📖 Libro Contable General",
     "📒 Contabilidad",
@@ -843,7 +844,6 @@ elif menu == "📦 Productos":
         st.dataframe(productos_display, hide_index=True, use_container_width=True)
     else:
         st.info("No hay productos en el catálogo.")
-
 # ════════════════════════════════════════════════════════════
 # VENTAS
 # ════════════════════════════════════════════════════════════
@@ -1317,6 +1317,7 @@ elif menu == "💰 Ventas":
             st.info("Haz clic en una fila para seleccionar una factura.")
     else:
         st.info("No hay facturas emitidas.")
+
 # ════════════════════════════════════════════════════════════
 # COMPRAS
 # ════════════════════════════════════════════════════════════
@@ -1495,6 +1496,213 @@ elif menu == "🛒 Compras":
                             st.error(f"Error: {e}")
     else:
         st.info("No hay gastos registrados.")
+
+# ════════════════════════════════════════════════════════════
+# EMPLEADOS (NUEVO)
+# ════════════════════════════════════════════════════════════
+elif menu == "👥 Empleados":
+    st.title("👥 Gestión de Empleados y Nóminas")
+    
+    tab_empleados, tab_nominas, tab_modelo111 = st.tabs(["👥 Empleados", "💰 Nóminas", "📄 Modelo 111"])
+    
+    # ════════════════════════════════════════════════════════════
+    # TAB 1: EMPLEADOS
+    # ════════════════════════════════════════════════════════════
+    with tab_empleados:
+        st.subheader("👥 Empleados Registrados")
+        
+        with st.form("add_employee", clear_on_submit=True):
+            st.markdown("**➕ Añadir nuevo empleado**")
+            col_e1, col_e2 = st.columns(2)
+            with col_e1:
+                nombre = st.text_input("Nombre completo")
+                dni = st.text_input("DNI/NIE")
+            with col_e2:
+                nss = st.text_input("Nº Seguridad Social")
+                fecha_alta = st.date_input("Fecha de alta", date.today())
+            
+            col_e3, col_e4 = st.columns(2)
+            with col_e3:
+                tipo_contrato = st.selectbox("Tipo de contrato", ["Indefinido", "Temporal", "Formación", "Prácticas"])
+                salario_bruto = st.number_input("Salario bruto anual (€)", min_value=0.0, step=1000.0)
+            with col_e4:
+                irpf_pct = st.number_input("% IRPF", min_value=0.0, max_value=45.0, value=15.0, step=0.5)
+                salario_mensual = salario_bruto / 12 if salario_bruto > 0 else 0
+                st.text(f"Salario mensual: {money(salario_mensual)}")
+            
+            if st.form_submit_button("💾 Guardar empleado"):
+                if nombre and dni and nss:
+                    try:
+                        ss_employee = salario_mensual * 0.0635
+                        ss_company = salario_mensual * 0.2930
+                        
+                        supabase.table("employees").insert({
+                            "user_id": user_id,
+                            "full_name": nombre.strip(),
+                            "dni_nie": dni.strip().upper(),
+                            "social_security_number": nss.strip(),
+                            "start_date": str(fecha_alta),
+                            "contract_type": tipo_contrato.lower(),
+                            "gross_salary": salario_mensual,
+                            "irpf_percentage": irpf_pct,
+                            "social_security_employee": ss_employee,
+                            "social_security_company": ss_company,
+                            "active": True
+                        }).execute()
+                        st.success("Empleado guardado correctamente")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+                else:
+                    st.error("Nombre, DNI y NSS son obligatorios.")
+        
+        try:
+            emp_res = supabase.table("employees").select("*").eq("user_id", user_id).eq("active", True).execute()
+            if emp_res.data:
+                emp_df = pd.DataFrame(emp_res.data)
+                emp_display = emp_df[["full_name", "dni_nie", "gross_salary", "irpf_percentage", "contract_type"]].copy()
+                emp_display.columns = ["Nombre", "DNI/NIE", "Salario Mensual", "IRPF %", "Contrato"]
+                st.dataframe(emp_display, hide_index=True, use_container_width=True)
+            else:
+                st.info("No hay empleados registrados.")
+        except Exception as e:
+            st.error(f"Error al cargar empleados: {e}")
+    
+    # ════════════════════════════════════════════════════════════
+    # TAB 2: NÓMINAS
+    # ════════════════════════════════════════════════════════════
+    with tab_nominas:
+        st.subheader("💰 Generar Nómina")
+        
+        try:
+            emp_res = supabase.table("employees").select("id, full_name, gross_salary, irpf_percentage, social_security_employee, social_security_company").eq("user_id", user_id).eq("active", True).execute()
+            
+            if emp_res.data:
+                emp_list = emp_res.data
+                emp_nombres = [f"{e['full_name']} - {money(e['gross_salary'])}/mes" for e in emp_list]
+                
+                col_n1, col_n2 = st.columns(2)
+                with col_n1:
+                    emp_sel = st.selectbox("Empleado", emp_nombres)
+                    emp_idx = emp_nombres.index(emp_sel)
+                    empleado = emp_list[emp_idx]
+                with col_n2:
+                    mes_nomina = st.selectbox("Mes", LISTA_MESES, index=datetime.now().month - 1)
+                
+                salario = empleado["gross_salary"]
+                irpf_pct = empleado["irpf_percentage"]
+                ss_emp = empleado["social_security_employee"]
+                ss_empresa = empleado["social_security_company"]
+                
+                irpf_amount = salario * irpf_pct / 100
+                neto = salario - irpf_amount - ss_emp
+                coste_empresa = salario + ss_empresa
+                
+                st.markdown("---")
+                st.subheader("📊 Resumen de Nómina")
+                
+                col_r1, col_r2, col_r3 = st.columns(3)
+                col_r1.metric("Salario Bruto", money(salario))
+                col_r2.metric("IRPF Retenido", f"-{money(irpf_amount)}")
+                col_r3.metric("SS Empleado", f"-{money(ss_emp)}")
+                
+                col_r4, col_r5, col_r6 = st.columns(3)
+                col_r4.metric("💵 Salario Neto", money(neto))
+                col_r5.metric("SS Empresa", money(ss_empresa))
+                col_r6.metric("💰 Coste Total Empresa", money(coste_empresa))
+                
+                if st.button("💾 Guardar nómina"):
+                    try:
+                        supabase.table("payrolls").insert({
+                            "user_id": user_id,
+                            "employee_id": empleado["id"],
+                            "month": mes_nomina,
+                            "year": date.today().year,
+                            "gross_salary": salario,
+                            "irpf_amount": irpf_amount,
+                            "social_security_employee": ss_emp,
+                            "social_security_company": ss_empresa,
+                            "net_salary": neto,
+                            "total_company_cost": coste_empresa
+                        }).execute()
+                        st.success(f"Nómina de {empleado['full_name']} guardada para {mes_nomina}")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+            else:
+                st.info("No hay empleados registrados. Añade uno primero en la pestaña 'Empleados'.")
+        except Exception as e:
+            st.error(f"Error: {e}")
+        
+        st.markdown("---")
+        st.subheader("📋 Historial de Nóminas")
+        try:
+            nom_res = supabase.table("payrolls").select("*, employees(full_name)").eq("user_id", user_id).order("created_at", desc=True).execute()
+            if nom_res.data:
+                nom_df = pd.DataFrame(nom_res.data)
+                if "employees" in nom_df.columns:
+                    nom_df["empleado"] = nom_df["employees"].apply(lambda x: x["full_name"] if isinstance(x, dict) else "")
+                else:
+                    nom_df["empleado"] = ""
+                nom_display = nom_df[["month", "year", "empleado", "gross_salary", "net_salary", "total_company_cost"]].copy()
+                nom_display.columns = ["Mes", "Año", "Empleado", "Bruto", "Neto", "Coste Empresa"]
+                st.dataframe(nom_display, hide_index=True, use_container_width=True)
+        except Exception:
+            pass
+    
+    # ════════════════════════════════════════════════════════════
+    # TAB 3: MODELO 111
+    # ════════════════════════════════════════════════════════════
+    with tab_modelo111:
+        st.subheader("📄 Modelo 111 - Retenciones IRPF")
+        
+        try:
+            hoy = date.today()
+            if hoy.month <= 3:
+                meses_trim = ["Enero", "Febrero", "Marzo"]
+                trimestre = "1T"
+            elif hoy.month <= 6:
+                meses_trim = ["Abril", "Mayo", "Junio"]
+                trimestre = "2T"
+            elif hoy.month <= 9:
+                meses_trim = ["Julio", "Agosto", "Septiembre"]
+                trimestre = "3T"
+            else:
+                meses_trim = ["Octubre", "Noviembre", "Diciembre"]
+                trimestre = "4T"
+            
+            nom_res = supabase.table("payrolls").select("*").eq("user_id", user_id).in_("month", meses_trim).execute()
+            
+            if nom_res.data:
+                nom_df = pd.DataFrame(nom_res.data)
+                total_irpf = nom_df["irpf_amount"].sum()
+                num_nominas = len(nom_df)
+                
+                st.markdown(f"### Trimestre {trimestre} {hoy.year}")
+                
+                col_m1, col_m2, col_m3 = st.columns(3)
+                col_m1.metric("Nº de Nóminas", num_nominas)
+                col_m2.metric("Total Retenciones IRPF", money(total_irpf))
+                col_m3.metric("A ingresar", money(total_irpf))
+                
+                st.info("📌 El Modelo 111 se presenta trimestralmente (1-20 de abril, julio, octubre, enero).")
+                
+                resumen_data = {
+                    "Concepto": ["Nº Nóminas", "Total Retenciones IRPF"],
+                    "Importe": [num_nominas, total_irpf]
+                }
+                resumen_df = pd.DataFrame(resumen_data)
+                csv_bytes = resumen_df.to_csv(index=False, sep=';').encode('utf-8-sig')
+                st.download_button(
+                    "⬇️ Descargar resumen CSV",
+                    csv_bytes,
+                    f"Modelo_111_{trimestre}_{hoy.year}.csv",
+                    mime="text/csv"
+                )
+            else:
+                st.info(f"No hay nóminas registradas para el trimestre actual.")
+        except Exception as e:
+            st.error(f"Error: {e}")
 
 # ════════════════════════════════════════════════════════════
 # FACTURACIÓN RECURRENTE
@@ -2155,7 +2363,7 @@ elif menu == "📊 Dashboards":
                 st.pyplot(fig3)
 
 # ════════════════════════════════════════════════════════════
-# PRESUPUESTOS (COMPLETO - Con PDF y Email)
+# PRESUPUESTOS (COMPLETO)
 # ════════════════════════════════════════════════════════════
 elif menu == "📝 Presupuestos":
     st.title("📝 Presupuestos")
