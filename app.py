@@ -1726,7 +1726,9 @@ elif menu == "📖 Libro Contable General":
         f"Libro_Registro_{mes_seleccionado}_{anio_seleccionado}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key="descargar_excel_libro"
-        # ════════════════════════════════════════════════════════════
+    
+)
+    # ════════════════════════════════════════════════════════════
 # CONTABILIDAD
 # ════════════════════════════════════════════════════════════
 elif menu == "📒 Contabilidad":
@@ -2862,5 +2864,3 @@ elif menu == "⚙️ Configuración":
         pdf_bytes = make_invoice_pdf_from_template(ejemplo_invoice, ejemplo_client, ejemplo_company, ejemplo_lineas)
         if pdf_bytes:
             st.download_button("Descargar factura de prueba", pdf_bytes, "prueba_factura.pdf", "application/pdf")
-)
-        
