@@ -843,6 +843,7 @@ elif menu == "📦 Productos":
         st.dataframe(productos_display, hide_index=True, use_container_width=True)
     else:
         st.info("No hay productos en el catálogo.")
+
 # ════════════════════════════════════════════════════════════
 # VENTAS
 # ════════════════════════════════════════════════════════════
@@ -1316,7 +1317,6 @@ elif menu == "💰 Ventas":
             st.info("Haz clic en una fila para seleccionar una factura.")
     else:
         st.info("No hay facturas emitidas.")
-
 # ════════════════════════════════════════════════════════════
 # COMPRAS
 # ════════════════════════════════════════════════════════════
@@ -2155,7 +2155,7 @@ elif menu == "📊 Dashboards":
                 st.pyplot(fig3)
 
 # ════════════════════════════════════════════════════════════
-# PRESUPUESTOS (COMPLETO)
+# PRESUPUESTOS (COMPLETO - Con PDF y Email)
 # ════════════════════════════════════════════════════════════
 elif menu == "📝 Presupuestos":
     st.title("📝 Presupuestos")
@@ -2445,7 +2445,7 @@ elif menu == "👥 Colaboradores":
     st.info("Funcionalidad en desarrollo.")
 
 # ════════════════════════════════════════════════════════════
-# PANEL DE ADMINISTRACIÓN (CORREGIDO - Mapeo email/nombre)
+# PANEL DE ADMINISTRACIÓN (CORREGIDO)
 # ════════════════════════════════════════════════════════════
 elif menu == "🔐 Panel Admin":
     st.title("🔐 Panel de Administración")
@@ -2526,37 +2526,71 @@ elif menu == "🔐 Panel Admin":
         col_k2.metric("👥 Usuarios Activos", usuarios_activos)
         col_k3.metric("📄 Facturas este mes", num_facturas_mes)
     
-    # TAB USUARIOS
+    # TAB USUARIOS (LEFT JOIN)
     with tab_usuarios:
         st.subheader("👥 Gestión de Usuarios")
         try:
             usuarios = []
-            roles_res = admin_client.table("user_roles").select("user_id, role").execute()
-            roles_dict = {r["user_id"]: r["role"] for r in roles_res.data} if roles_res.data else {}
+            try:
+                users_view_res = admin_client.table("users_view").select("*").execute()
+                users_view_data = users_view_res.data if users_view_res.data else []
+            except Exception:
+                users_view_data = []
             
-            subs_res = admin_client.table("subscriptions").select("user_id, plan, status").execute()
-            subs_dict = {s["user_id"]: {"plan": s["plan"], "status": s["status"]} for s in subs_res.data} if subs_res.data else {}
+            try:
+                roles_res = admin_client.table("user_roles").select("user_id, role").execute()
+                roles_dict = {r["user_id"]: r["role"] for r in roles_res.data} if roles_res.data else {}
+            except Exception:
+                roles_dict = {}
             
-            settings_res = admin_client.table("settings").select("user_id, company_name, company_tax_id, company_email").execute()
-            settings_dict = {s["user_id"]: {"company_name": s.get("company_name", ""), "company_tax_id": s.get("company_tax_id", ""), "company_email": s.get("company_email", "")} for s in settings_res.data} if settings_res.data else {}
+            try:
+                subs_res = admin_client.table("subscriptions").select("user_id, plan, status").execute()
+                subs_dict = {s["user_id"]: {"plan": s["plan"], "status": s["status"]} for s in subs_res.data} if subs_res.data else {}
+            except Exception:
+                subs_dict = {}
             
-            all_user_ids = set()
-            all_user_ids.update(roles_dict.keys())
-            all_user_ids.update(subs_dict.keys())
-            all_user_ids.update(settings_dict.keys())
+            try:
+                settings_res = admin_client.table("settings").select("user_id, company_name, company_tax_id, company_email").execute()
+                settings_dict = {s["user_id"]: {"company_name": s.get("company_name", ""), "company_tax_id": s.get("company_tax_id", ""), "company_email": s.get("company_email", "")} for s in settings_res.data} if settings_res.data else {}
+            except Exception:
+                settings_dict = {}
             
-            for uid in all_user_ids:
-                usuarios.append({
-                    "id": uid,
-                    "email": settings_dict.get(uid, {}).get("company_email", ""),
-                    "company_name": settings_dict.get(uid, {}).get("company_name", ""),
-                    "company_tax_id": settings_dict.get(uid, {}).get("company_tax_id", ""),
-                    "role": roles_dict.get(uid, "cliente"),
-                    "plan": subs_dict.get(uid, {}).get("plan", "free"),
-                    "status": subs_dict.get(uid, {}).get("status", "inactive"),
-                })
+            if users_view_data:
+                for u in users_view_data:
+                    uid = u.get("id", "")
+                    email = u.get("email", "")
+                    role = roles_dict.get(uid, "cliente")
+                    sub_info = subs_dict.get(uid, {"plan": "free", "status": "active"})
+                    setting_info = settings_dict.get(uid, {"company_name": "", "company_tax_id": "", "company_email": email})
+                    usuarios.append({
+                        "id": uid,
+                        "email": setting_info.get("company_email", "") or email,
+                        "company_name": setting_info.get("company_name", ""),
+                        "company_tax_id": setting_info.get("company_tax_id", ""),
+                        "role": role,
+                        "plan": sub_info.get("plan", "free"),
+                        "status": sub_info.get("status", "active"),
+                    })
+            else:
+                all_user_ids = set()
+                all_user_ids.update(roles_dict.keys())
+                all_user_ids.update(subs_dict.keys())
+                all_user_ids.update(settings_dict.keys())
+                for uid in all_user_ids:
+                    setting_info = settings_dict.get(uid, {"company_name": "", "company_tax_id": "", "company_email": ""})
+                    sub_info = subs_dict.get(uid, {"plan": "free", "status": "active"})
+                    usuarios.append({
+                        "id": uid,
+                        "email": setting_info.get("company_email", ""),
+                        "company_name": setting_info.get("company_name", ""),
+                        "company_tax_id": setting_info.get("company_tax_id", ""),
+                        "role": roles_dict.get(uid, "cliente"),
+                        "plan": sub_info.get("plan", "free"),
+                        "status": sub_info.get("status", "active"),
+                    })
             
             if usuarios:
+                st.success(f"✅ Se encontraron {len(usuarios)} usuarios")
                 busqueda = st.text_input("🔍 Buscar por email, nombre o CIF", key="busqueda_admin_usuarios")
                 usuarios_filtrados = usuarios
                 if busqueda:
@@ -2607,18 +2641,15 @@ elif menu == "🔐 Panel Admin":
         except Exception as e:
             st.error(f"Error al cargar usuarios: {e}")
     
-    # TAB SUSCRIPCIONES (CORREGIDO - Mapeo email/nombre)
+    # TAB SUSCRIPCIONES (MAPEO EMAIL)
     with tab_suscripciones:
         st.subheader("💳 Control de Suscripciones")
         try:
             subs_res = admin_client.table("subscriptions").select("*").execute()
-            
             if subs_res.data:
                 subs_df = pd.DataFrame(subs_res.data)
                 
-                # Crear diccionario de mapeo
                 mapping_dict = {}
-                
                 try:
                     users_view_res = admin_client.table("users_view").select("id, email").execute()
                     if users_view_res.data:
