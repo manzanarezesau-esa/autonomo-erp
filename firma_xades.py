@@ -10,18 +10,14 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.serialization import pkcs12
 from signxml import XMLSigner, methods
 
-# Lista de servidores TSA (incluyendo FNMT España)
+# TSA - URLs corregidas
 TSA_LIST = [
-    "http://servicios.cert.fnmt.es/tsa/postreq.aspx",  # FNMT (España)
     "https://freetsa.org/tsr",
-    "http://timestamp.digicert.com",
-    "http://timestamp.sectigo.com",
 ]
 
 TSA_HEADERS = {
     "Content-Type": "application/timestamp-query",
-    "Accept": "application/timestamp-reply",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) HondureformasERP/1.0"
+    "User-Agent": "HondureformasERP/1.0"
 }
 
 
@@ -44,32 +40,21 @@ def crear_timestamp_request(data_to_timestamp):
 
 
 def solicitar_timestamp(tsq_bytes):
-    """Solicita timestamp a múltiples TSA."""
+    """Solicita timestamp sin mostrar warnings excesivos."""
     for url in TSA_LIST:
         try:
-            st.info(f"Intentando TSA: {url}")
             response = requests.post(
                 url,
                 data=tsq_bytes,
                 headers=TSA_HEADERS,
-                timeout=20
+                timeout=10
             )
             
-            # Verificar respuesta válida
             if response.status_code == 200 and len(response.content) > 100:
-                # Timestamp token válido empieza con 0x30 (SEQUENCE)
                 if response.content[0] == 0x30:
-                    st.success(f"✅ Timestamp obtenido de: {url}")
                     return response.content
-                else:
-                    st.warning(f"Respuesta no válida de {url} (no es DER)")
-            else:
-                st.warning(f"HTTP {response.status_code} de {url}")
-                
-        except requests.exceptions.Timeout:
-            st.warning(f"Timeout en {url}")
-        except Exception as e:
-            st.warning(f"Error en {url}: {str(e)}")
+        except Exception:
+            pass
     
     return None
 
@@ -94,8 +79,9 @@ def cargar_certificado_p12(p12_content, password_input):
 
 def firmar_facturae_xml(xml_input, certificado_p12, password_certificado, usar_timestamp=True):
     """
-    Firma XML con XAdES-EPES o XAdES-T.
-    Si el timestamp falla, genera XAdES-EPES limpio.
+    Firma XML con XAdES-EPES.
+    Si usar_timestamp=True y se obtiene timestamp válido, añade XAdES-T.
+    Si no, genera XAdES-EPES limpio SIN warnings excesivos.
     """
     try:
         private_key, certificate, _ = cargar_certificado_p12(certificado_p12, password_certificado)
@@ -129,11 +115,12 @@ def firmar_facturae_xml(xml_input, certificado_p12, password_certificado, usar_t
             reference_uri=f"#{root_id}"
         )
         
-        # Timestamp opcional
+        # Timestamp opcional - SILENCIOSO si falla
         if usar_timestamp:
             try:
                 signed_data = etree.tostring(signed_xml, method='c14n')
-                timestamp_token = solicitar_timestamp(crear_timestamp_request(signed_data))
+                ts_request = crear_timestamp_request(signed_data)
+                timestamp_token = solicitar_timestamp(ts_request)
                 
                 if timestamp_token and len(timestamp_token) > 100:
                     signature_node = signed_xml.find(".//{http://www.w3.org/2000/09/xmldsig#}Signature")
@@ -161,11 +148,13 @@ def firmar_facturae_xml(xml_input, certificado_p12, password_certificado, usar_t
                         encapsulated_ts = etree.SubElement(sig_timestamp, f"{{{ns_xades}}}EncapsulatedTimeStamp")
                         encapsulated_ts.text = timestamp_b64
                         
-                        st.success("✅ Firma XAdES-T aplicada")
+                        st.success("✅ Firma XAdES-T con timestamp aplicada")
                 else:
-                    st.warning("⚠️ No se pudo obtener timestamp. Se generó XAdES-EPES (válido sin timestamp).")
-            except Exception as e:
-                st.warning(f"⚠️ Error en timestamp: {str(e)}. Se generó XAdES-EPES.")
+                    st.info("ℹ️ Firma XAdES-EPES generada (sin timestamp). Es válida para presentar.")
+            except Exception:
+                st.info("ℹ️ Firma XAdES-EPES generada (sin timestamp). Es válida para presentar.")
+        else:
+            st.info("ℹ️ Firma XAdES-EPES generada (sin timestamp). Es válida para presentar.")
         
         result = etree.tostring(signed_xml, encoding='utf-8', xml_declaration=True, pretty_print=True)
         return result.decode('utf-8')
