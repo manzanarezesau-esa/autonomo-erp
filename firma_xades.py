@@ -5,219 +5,121 @@ import base64
 import uuid
 import requests
 import hashlib
+from datetime import datetime, timezone
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.serialization import pkcs12
 from signxml import XMLSigner, methods
 
-# ============================================================
-# CONFIGURACIÓN DE LA TSA (Autoridad de Sellado de Tiempo)
-# ============================================================
-
-# Lista de servidores TSA en orden de preferencia
-# FreeTSA primero para evitar bloqueos en Streamlit Cloud
+# Lista de servidores TSA
 TSA_LIST = [
-    "https://freetsa.org/tsr",                           # FreeTSA (Gratuita - primera opción)
-    "http://timestamp.digicert.com",                     # DigiCert (Internacional)
-    "http://servicios.cert.fnmt.es/tsa/postreq.aspx"    # FNMT (España - última opción)
+    "https://freetsa.org/tsr",
+    "http://timestamp.digicert.com",
 ]
 
-# Headers HTTP completos para evitar bloqueos
 TSA_HEADERS = {
     "Content-Type": "application/timestamp-query",
     "Accept": "application/timestamp-reply",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AutonomoERP/1.0"
+    "User-Agent": "Mozilla/5.0 HondureformasERP/1.0"
 }
 
 
 def crear_timestamp_request(data_to_timestamp):
-    """
-    Crea una petición de timestamp RFC 3161.
+    """Crea petición de timestamp RFC 3161 usando hashlib."""
+    digest = hashlib.sha256(data_to_timestamp).digest()
     
-    Parámetros:
-    - data_to_timestamp: Datos a sellar (bytes)
-    
-    Retorna:
-    - Petición timestamp en formato DER (bytes)
-    """
-    try:
-        from Crypto.Hash import SHA256
-    except ImportError:
-        st.error("La librería pycryptodome no está instalada. Ejecuta: pip install pycryptodome")
-        return None
-    
-    # Calcular hash SHA-256 de los datos
-    hash_obj = SHA256.new(data_to_timestamp)
-    digest = hash_obj.digest()
-    
-    # Construcción manual del DER (TimestampRequest RFC 3161)
-    # OID para SHA-256: 2.16.840.1.101.3.4.2.1
+    # OID SHA-256: 2.16.840.1.101.3.4.2.1
     oid_sha256 = bytes([0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01])
     octet_string = bytes([0x04, 0x20]) + digest
-    
-    # SEQUENCE interna: MessageImprint
     inner_seq = bytes([0x30, len(oid_sha256) + len(octet_string)]) + oid_sha256 + octet_string
     
-    # TimestampRequest completo:
-    # SEQUENCE { INTEGER version, SEQUENCE messageImprint, BOOLEAN certReq }
     request = (
-        bytes([0x30, len(inner_seq) + 5]) +   # Longitud total
-        bytes([0x02, 0x01, 0x01]) +           # version = 1
-        inner_seq +                            # MessageImprint
-        bytes([0x01, 0x01, 0x00])              # certReq = false
+        bytes([0x30, len(inner_seq) + 5]) +
+        bytes([0x02, 0x01, 0x01]) +
+        inner_seq +
+        bytes([0x01, 0x01, 0x00])
     )
     
     return request
 
 
 def solicitar_timestamp(tsq_bytes):
-    """
-    Solicita un sello de tiempo a múltiples TSA con reintentos automáticos.
-    
-    Parámetros:
-    - tsq_bytes: Petición timestamp en formato DER (bytes)
-    
-    Retorna:
-    - Timestamp token (bytes) o lanza excepción si todas fallan
-    """
+    """Solicita timestamp a TSA con verificación de respuesta válida."""
     for url in TSA_LIST:
         try:
-            response = requests.post(
-                url,
-                data=tsq_bytes,
-                headers=TSA_HEADERS,
-                timeout=10
-            )
+            response = requests.post(url, data=tsq_bytes, headers=TSA_HEADERS, timeout=15)
             
-            if response.status_code == 200 and len(response.content) > 0:
-                st.info(f"✅ Sello de tiempo obtenido de: {url.split('/')[2]}")
-                return response.content
+            if response.status_code == 200 and len(response.content) > 100:
+                # Verificar que la respuesta NO sea un error
+                # Una respuesta TSA válida empieza con 0x30 (SEQUENCE)
+                if response.content[0] == 0x30:
+                    return response.content
+                else:
+                    st.warning(f"TSA {url} devolvió respuesta no válida. Intentando siguiente...")
             else:
-                st.warning(f"TSA {url} devolvió HTTP {response.status_code}. Intentando con la siguiente...")
+                st.warning(f"TSA {url} devolvió HTTP {response.status_code} o respuesta corta.")
                 
-        except requests.exceptions.Timeout:
-            st.warning(f"Timeout en TSA {url}. Intentando con la siguiente...")
-        except requests.exceptions.ConnectionError:
-            st.warning(f"Error de conexión con TSA {url}. Intentando con la siguiente...")
         except Exception as e:
-            st.warning(f"Error en TSA {url}: {str(e)}. Intentando con la siguiente...")
+            st.warning(f"Error en TSA {url}: {str(e)}")
     
-    # Si llegamos aquí, todas las TSA fallaron
-    raise Exception("Imposible obtener el sello de tiempo de las TSAs disponibles.")
+    return None
 
 
 def obtener_timestamp(data_to_timestamp):
-    """
-    Obtiene un sello de tiempo RFC 3161 con reintentos entre múltiples TSA.
-    
-    Parámetros:
-    - data_to_timestamp: Datos a sellar (bytes)
-    
-    Retorna:
-    - Timestamp token (bytes) o None si falla
-    """
+    """Obtiene timestamp válido o None."""
     try:
-        # Crear petición timestamp
         ts_request = crear_timestamp_request(data_to_timestamp)
-        
-        if ts_request is None:
-            return None
-        
-        # Solicitar timestamp con reintentos automáticos
-        timestamp_token = solicitar_timestamp(ts_request)
-        return timestamp_token
-        
-    except Exception as e:
-        st.warning(f"Error al obtener timestamp: {str(e)}. La firma se realizará sin timestamp.")
+        return solicitar_timestamp(ts_request)
+    except Exception:
         return None
 
 
 def cargar_certificado_p12(p12_content, password_input):
-    """
-    Carga y valida el certificado digital PKCS12 (.p12 / .pfx).
-    """
-    # 1. Asegurar que la contraseña sea bytes o None
+    """Carga certificado PKCS12."""
     if password_input:
-        if isinstance(password_input, str):
-            password_bytes = password_input.encode('utf-8')
-        else:
-            password_bytes = password_input
+        password_bytes = password_input.encode('utf-8') if isinstance(password_input, str) else password_input
     else:
         password_bytes = None
     
-    # 2. Asegurar que los datos del certificado sean bytes binarios
     if isinstance(p12_content, str):
         if "base64," in p12_content:
             p12_content = p12_content.split("base64,")[1]
-        try:
-            p12_bytes = base64.b64decode(p12_content)
-        except Exception as e:
-            raise ValueError(
-                "El contenido Base64 del certificado no es válido. "
-                "Verifique que el certificado esté correctamente codificado en Base64."
-            ) from e
-    elif isinstance(p12_content, bytes):
-        p12_bytes = p12_content
+        p12_bytes = base64.b64decode(p12_content)
     else:
-        raise ValueError("El contenido del certificado debe ser bytes o una cadena Base64.")
+        p12_bytes = p12_content
     
-    # 3. Intentar deserializar
-    try:
-        private_key, certificate, additional_certs = pkcs12.load_key_and_certificates(
-            p12_bytes,
-            password_bytes
-        )
-        return private_key, certificate, additional_certs
-    except ValueError as e:
-        raise ValueError(
-            "No se pudo desencriptar el certificado. Verifique que la contraseña sea correcta "
-            "y que el archivo cargado sea un certificado válido (.p12 / .pfx)."
-        ) from e
-    except Exception as e:
-        raise ValueError(
-            f"Error inesperado al cargar el certificado: {str(e)}"
-        ) from e
+    private_key, certificate, additional_certs = pkcs12.load_key_and_certificates(p12_bytes, password_bytes)
+    return private_key, certificate, additional_certs
 
 
 def firmar_facturae_xml(xml_input, certificado_p12, password_certificado, usar_timestamp=True):
     """
-    Firma un XML FacturaE con XAdES-EPES o XAdES-T (con timestamp).
-    
-    Parámetros:
-    - xml_input: String del XML FacturaE sin firmar (str, bytes o Element)
-    - certificado_p12: Bytes del certificado .p12/.pfx o Base64
-    - password_certificado: Contraseña del certificado
-    - usar_timestamp: Boolean para añadir timestamp (XAdES-T) o no (XAdES-EPES)
-    
-    Retorna:
-    - XML firmado como string
+    Firma XML FacturaE con XAdES-EPES.
+    Si usar_timestamp=True y el timestamp se obtiene correctamente, añade XAdES-T.
+    Si el timestamp falla, genera XAdES-EPES (sin timestamp) - NUNCA inserta errores.
     """
     try:
-        # Cargar y validar el certificado P12
-        private_key, certificate, additional_certs = cargar_certificado_p12(
-            certificado_p12,
-            password_certificado
-        )
+        # Cargar certificado
+        private_key, certificate, _ = cargar_certificado_p12(certificado_p12, password_certificado)
         
-        # Convertir a formato PEM para signxml
+        # Convertir a PEM
         private_key_pem = private_key.private_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PrivateFormat.PKCS8,
             encryption_algorithm=serialization.NoEncryption()
         )
-        
         cert_pem = certificate.public_bytes(serialization.Encoding.PEM)
         
-        # Asegurar que tenemos un Element XML (no string)
+        # Parsear XML
         if isinstance(xml_input, (str, bytes)):
             xml_root = etree.fromstring(xml_input.encode('utf-8') if isinstance(xml_input, str) else xml_input)
         else:
             xml_root = xml_input
         
-        # Asignar un ID único al nodo raíz
+        # ID único
         root_id = f"Facturae-{uuid.uuid4().hex[:16]}"
         xml_root.set("Id", root_id)
         
-        # Configurar firmador XAdES
+        # Firmar
         signer = XMLSigner(
             method=methods.enveloped,
             signature_algorithm="rsa-sha256",
@@ -225,7 +127,6 @@ def firmar_facturae_xml(xml_input, certificado_p12, password_certificado, usar_t
             c14n_algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"
         )
         
-        # Firmar el XML
         signed_xml = signer.sign(
             xml_root,
             key=private_key_pem,
@@ -233,119 +134,50 @@ def firmar_facturae_xml(xml_input, certificado_p12, password_certificado, usar_t
             reference_uri=f"#{root_id}"
         )
         
-        # Si se solicita timestamp, añadir XAdES-T
+        # Intentar timestamp SOLO si se solicita
         if usar_timestamp:
+            timestamp_token = None
             try:
-                # ✅ CORRECTO: Sin encoding en C14N (devuelve bytes)
                 signed_data = etree.tostring(signed_xml, method='c14n')
-                
-                # Obtener timestamp con reintentos automáticos
                 timestamp_token = obtener_timestamp(signed_data)
-                
-                if timestamp_token:
-                    # Añadir el timestamp al XML firmado
-                    signature_node = signed_xml.find(".//{http://www.w3.org/2000/09/xmldsig#}Signature")
+            except Exception:
+                timestamp_token = None
+            
+            if timestamp_token and len(timestamp_token) > 100:
+                # Timestamp VÁLIDO - añadir XAdES-T
+                signature_node = signed_xml.find(".//{http://www.w3.org/2000/09/xmldsig#}Signature")
+                if signature_node is not None:
+                    ns_xades = "http://uri.etsi.org/01903/v1.1.1#"
+                    ns_ds = "http://www.w3.org/2000/09/xmldsig#"
                     
-                    if signature_node is not None:
-                        # Crear elemento para el timestamp
-                        ns_xades = "http://uri.etsi.org/01903/v1.1.1#"
-                        ns_ds = "http://www.w3.org/2000/09/xmldsig#"
-                        
-                        # Buscar o crear Object para XAdES
-                        object_node = signature_node.find(f"{{{ns_ds}}}Object")
-                        
-                        if object_node is None:
-                            object_node = etree.SubElement(signature_node, f"{{{ns_ds}}}Object")
-                        
-                        # Crear QualifyingProperties
-                        qualifying_props = etree.SubElement(
-                            object_node,
-                            f"{{{ns_xades}}}QualifyingProperties",
-                            Target=f"#{root_id}"
-                        )
-                        
-                        # Crear SignedProperties
-                        signed_props = etree.SubElement(
-                            qualifying_props,
-                            f"{{{ns_xades}}}SignedProperties"
-                        )
-                        
-                        # Crear SignedSignatureProperties
-                        signed_sig_props = etree.SubElement(
-                            signed_props,
-                            f"{{{ns_xades}}}SignedSignatureProperties"
-                        )
-                        
-                        # Crear SigningTime
-                        from datetime import datetime, timezone
-                        signing_time = etree.SubElement(
-                            signed_sig_props,
-                            f"{{{ns_xades}}}SigningTime"
-                        )
-                        signing_time.text = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-                        
-                        # Crear SignatureTimeStamp (XAdES-T)
-                        sig_timestamp = etree.SubElement(
-                            signed_sig_props,
-                            f"{{{ns_xades}}}SignatureTimeStamp"
-                        )
-                        
-                        # Incluir el timestamp token en base64
-                        timestamp_b64 = base64.b64encode(timestamp_token).decode('utf-8')
-                        
-                        # Crear EncapsulatedTimeStamp
-                        encapsulated_ts = etree.SubElement(
-                            sig_timestamp,
-                            f"{{{ns_xades}}}EncapsulatedTimeStamp"
-                        )
-                        encapsulated_ts.text = timestamp_b64
-                        
-                        st.success("✅ Firma XAdES-T con timestamp aplicada correctamente")
-                    else:
-                        st.warning("No se encontró el nodo de firma para añadir timestamp.")
-                else:
-                    st.warning("No se pudo obtener timestamp. La firma será XAdES-EPES (sin timestamp).")
+                    object_node = etree.SubElement(signature_node, f"{{{ns_ds}}}Object")
                     
-            except Exception as e:
-                st.warning(f"Error al añadir timestamp: {str(e)}. La firma será XAdES-EPES (sin timestamp).")
+                    qualifying_props = etree.SubElement(
+                        object_node,
+                        f"{{{ns_xades}}}QualifyingProperties",
+                        Target=f"#{root_id}"
+                    )
+                    
+                    signed_props = etree.SubElement(qualifying_props, f"{{{ns_xades}}}SignedProperties")
+                    signed_sig_props = etree.SubElement(signed_props, f"{{{ns_xades}}}SignedSignatureProperties")
+                    
+                    signing_time = etree.SubElement(signed_sig_props, f"{{{ns_xades}}}SigningTime")
+                    signing_time.text = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    
+                    sig_timestamp = etree.SubElement(signed_sig_props, f"{{{ns_xades}}}SignatureTimeStamp")
+                    timestamp_b64 = base64.b64encode(timestamp_token).decode('utf-8')
+                    
+                    encapsulated_ts = etree.SubElement(sig_timestamp, f"{{{ns_xades}}}EncapsulatedTimeStamp")
+                    encapsulated_ts.text = timestamp_b64
+                    
+                    st.success("✅ Firma XAdES-T con timestamp aplicada")
+            else:
+                st.warning("⚠️ No se pudo obtener timestamp válido. Se generará firma XAdES-EPES (sin timestamp).")
         
-        # Convertir a string (aquí SÍ usamos encoding porque NO es C14N)
+        # Convertir a string
         result = etree.tostring(signed_xml, encoding='utf-8', xml_declaration=True, pretty_print=True)
         return result.decode('utf-8')
         
-    except ValueError as e:
-        st.error(f"Error de certificado: {str(e)}")
-        return xml_input if isinstance(xml_input, str) else etree.tostring(xml_input, encoding='utf-8').decode('utf-8')
-    except ImportError as e:
-        st.error(f"Librería no instalada: {str(e)}")
-        return xml_input if isinstance(xml_input, str) else etree.tostring(xml_input, encoding='utf-8').decode('utf-8')
     except Exception as e:
-        st.warning(f"No se pudo firmar el XML: {str(e)}")
+        st.error(f"Error al firmar: {str(e)}")
         return xml_input if isinstance(xml_input, str) else etree.tostring(xml_input, encoding='utf-8').decode('utf-8')
-
-
-def cargar_certificado_desde_secrets():
-    """
-    Carga el certificado desde st.secrets (para Streamlit Cloud).
-    
-    Retorna:
-    - (certificado_bytes, password) o (None, None) si no está configurado
-    """
-    try:
-        cert_b64 = st.secrets.get("CERTIFICADO_P12_BASE64", "")
-        password = st.secrets.get("CERTIFICADO_PASSWORD", "")
-        
-        if cert_b64 and password:
-            try:
-                certificado_bytes = base64.b64decode(cert_b64)
-                return certificado_bytes, password
-            except Exception:
-                st.error("El Base64 del certificado en secrets no es válido.")
-                return None, None
-        elif cert_b64 and not password:
-            st.warning("Certificado configurado pero falta la contraseña (CERTIFICADO_PASSWORD).")
-            return None, None
-        return None, None
-    except Exception as e:
-        st.error(f"Error al cargar certificado desde secrets: {str(e)}")
-        return None, None
