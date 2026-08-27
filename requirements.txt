@@ -13,4 +13,3 @@ cryptography
 lxml
 pycryptodome
 stripe
-openpyx1
