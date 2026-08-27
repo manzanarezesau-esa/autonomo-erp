@@ -2721,61 +2721,111 @@ elif menu == "🔐 Panel Admin":
             st.error(f"Error al cargar usuarios: {e}")
             st.info("Verifica que la vista 'users_view' exista en Supabase o que SUPABASE_SERVICE_ROLE_KEY esté configurada.")
     
-    # ════════════════════════════════════════════════════════════
-    # TAB 3: SUSCRIPCIONES (CORREGIDO - Mostrar email)
-    # ════════════════════════════════════════════════════════════
-    with tab_suscripciones:
-        st.subheader("💳 Control de Suscripciones")
-        
-        try:
-            subs_res = admin_client.table("subscriptions").select("*").execute()
-            
-            if subs_res.data:
-                subs_df = pd.DataFrame(subs_res.data)
-                
-                # Obtener emails de settings
-                try:
-                    settings_res = admin_client.table("settings").select("user_id, company_email, company_name").execute()
-                    settings_dict = {
-                        s["user_id"]: {
-                            "email": s.get("company_email", ""),
-                            "nombre": s.get("company_name", "")
-                        } for s in settings_res.data
-                    } if settings_res.data else {}
-                except Exception:
-                    settings_dict = {}
-                
-                # Agregar email al DataFrame
-                subs_df["email"] = subs_df["user_id"].apply(lambda x: settings_dict.get(x, {}).get("email", "N/A"))
-                subs_df["nombre"] = subs_df["user_id"].apply(lambda x: settings_dict.get(x, {}).get("nombre", "N/A"))
-                
-                # Resumen
-                total_activas = len(subs_df[subs_df["status"] == "active"])
-                total_trialing = len(subs_df[subs_df["status"] == "trialing"])
-                total_past_due = len(subs_df[subs_df["status"] == "past_due"])
-                total_canceled = len(subs_df[subs_df["status"] == "cancelled"])
-                
-                col_s1, col_s2, col_s3, col_s4 = st.columns(4)
-                col_s1.metric("✅ Activas", total_activas)
-                col_s2.metric("🎁 Prueba", total_trialing)
-                col_s3.metric("⚠️ Atrasadas", total_past_due)
-                col_s4.metric("❌ Canceladas", total_canceled)
-                
-                if total_past_due > 0:
-                    st.error(f"🚨 {total_past_due} usuarios con pagos atrasados")
-                
-                st.markdown("---")
-                
-                # Mostrar tabla con email en vez de UUID
-                subs_display = subs_df[["email", "nombre", "plan", "status"]].copy()
-                subs_display.columns = ["Email", "Nombre", "Plan", "Estado"]
-                st.dataframe(subs_display, hide_index=True, use_container_width=True)
-            else:
-                st.info("No hay suscripciones registradas.")
-        except Exception as e:
-            st.error(f"Error al cargar suscripciones: {e}")
+  # ════════════════════════════════════════════════════════════
+# TAB 3: SUSCRIPCIONES (CORREGIDO - Mapeo email/nombre)
+# ════════════════════════════════════════════════════════════
+with tab_suscripciones:
+    st.subheader("💳 Control de Suscripciones")
     
-    # ════════════════════════════════════════════════════════════
+    try:
+        # 1. Consultar suscripciones
+        subs_res = admin_client.table("subscriptions").select("*").execute()
+        
+        if subs_res.data:
+            subs_df = pd.DataFrame(subs_res.data)
+            
+            # 2. Crear diccionario de mapeo user_id → email/nombre
+            # Intentar primero con users_view (tiene email de auth.users)
+            mapping_dict = {}
+            
+            # Opción A: users_view (email real de auth.users)
+            try:
+                users_view_res = admin_client.table("users_view").select("id, email").execute()
+                if users_view_res.data:
+                    for u in users_view_res.data:
+                        mapping_dict[u["id"]] = {
+                            "email": u.get("email", ""),
+                            "nombre": ""  # Se rellenará con settings
+                        }
+            except Exception:
+                pass
+            
+            # Opción B: settings (company_email + company_name)
+            try:
+                settings_res = admin_client.table("settings").select("user_id, company_email, company_name").execute()
+                if settings_res.data:
+                    for s in settings_res.data:
+                        uid = s["user_id"]
+                        if uid not in mapping_dict:
+                            mapping_dict[uid] = {"email": "", "nombre": ""}
+                        # Rellenar email si viene de settings
+                        if not mapping_dict[uid].get("email"):
+                            mapping_dict[uid]["email"] = s.get("company_email", "")
+                        # Rellenar nombre desde settings
+                        mapping_dict[uid]["nombre"] = s.get("company_name", "")
+            except Exception:
+                pass
+            
+            # Opción C: user_roles (por si no hay settings)
+            try:
+                roles_res = admin_client.table("user_roles").select("user_id, role").execute()
+                if roles_res.data:
+                    for r in roles_res.data:
+                        uid = r["user_id"]
+                        if uid not in mapping_dict:
+                            mapping_dict[uid] = {"email": "", "nombre": ""}
+            except Exception:
+                pass
+            
+            # 3. Reemplazar N/A por valores del mapeo
+            def get_email(uid):
+                info = mapping_dict.get(uid, {})
+                email = info.get("email", "")
+                return email if email else "Sin email"
+            
+            def get_nombre(uid):
+                info = mapping_dict.get(uid, {})
+                nombre = info.get("nombre", "")
+                return nombre if nombre else "Sin nombre"
+            
+            subs_df["email"] = subs_df["user_id"].apply(get_email)
+            subs_df["nombre"] = subs_df["user_id"].apply(get_nombre)
+            
+            # 4. Resumen
+            total_activas = len(subs_df[subs_df["status"] == "active"])
+            total_trialing = len(subs_df[subs_df["status"] == "trialing"])
+            total_past_due = len(subs_df[subs_df["status"] == "past_due"])
+            total_canceled = len(subs_df[subs_df["status"] == "cancelled"])
+            
+            col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+            col_s1.metric("✅ Activas", total_activas)
+            col_s2.metric("🎁 Prueba", total_trialing)
+            col_s3.metric("⚠️ Atrasadas", total_past_due)
+            col_s4.metric("❌ Canceladas", total_canceled)
+            
+            if total_past_due > 0:
+                st.error(f"🚨 {total_past_due} usuarios con pagos atrasados")
+            
+            st.markdown("---")
+            
+            # 5. Mostrar tabla con email y nombre reales
+            subs_display = subs_df[["email", "nombre", "plan", "status"]].copy()
+            subs_display.columns = ["Email", "Nombre", "Plan", "Estado"]
+            
+            # Ordenar por email para mejor legibilidad
+            subs_display = subs_display.sort_values("Email")
+            
+            st.dataframe(subs_display, hide_index=True, use_container_width=True)
+            
+            # Mostrar información de debug si hay N/A
+            sin_email = len(subs_df[subs_df["email"] == "Sin email"])
+            if sin_email > 0:
+                st.info(f"ℹ️ {sin_email} suscripciones sin email asociado (usuarios sin settings).")
+        else:
+            st.info("No hay suscripciones registradas.")
+    except Exception as e:
+        st.error(f"Error al cargar suscripciones: {e}")
+  ════════════════════════════════════════════════════════════
     # TAB 4: LOGS (CORREGIDO - admin_client)
     # ════════════════════════════════════════════════════════════
     with tab_logs:
