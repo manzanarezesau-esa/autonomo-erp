@@ -2473,9 +2473,10 @@ elif menu == "📊 Dashboards":
                 ax3.set_title("Estado de Facturas", fontweight="bold")
                 fig3.tight_layout()
                 st.pyplot(fig3)
+                
 
-# ════════════════════════════════════════════════════════════
-# PRESUPUESTOS (COMPLETO)
+ ════════════════════════════════════════════════════════════
+# PRESUPUESTOS
 # ════════════════════════════════════════════════════════════
 elif menu == "📝 Presupuestos":
     st.title("📝 Presupuestos")
@@ -2603,7 +2604,7 @@ elif menu == "📝 Presupuestos":
                 base_linea = cantidad * precio
                 vat_amount = base_linea * vat / 100
                 irpf_amount = base_linea * irpf / 100
-                total_linea = base_linea + vat_amount - irpf_amount
+                total_linea = base_linea + vat_amount + irpf_amount
                 st.text(f"Total: {money(total_linea)}")
             descripcion_linea = f"{prod_sel}\n{desc_manual.strip()}" if prod_sel != "-- Manual --" and desc_manual.strip() else (desc_manual.strip() if desc_manual.strip() else prod_sel)
             lineas.append({"description": descripcion_linea, "quantity": cantidad, "unit_price": precio, "base_amount": base_linea, "vat_percentage": vat, "vat_amount": vat_amount, "irpf_percentage": irpf, "irpf_amount": irpf_amount, "total": total_linea})
@@ -2612,7 +2613,7 @@ elif menu == "📝 Presupuestos":
             base_total = sum(l["base_amount"] for l in lineas)
             vat_total = sum(l["vat_amount"] for l in lineas)
             irpf_total = sum(l["irpf_amount"] for l in lineas)
-            total = base_total + vat_total - irpf_total
+            total = base_total + vat_total + irpf_total
         else:
             base_total = vat_total = irpf_total = total = 0.0
 
