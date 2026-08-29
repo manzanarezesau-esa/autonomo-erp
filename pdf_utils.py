@@ -7,20 +7,13 @@ import re
 from jinja2 import Template
 import qrcode
 from qrcode.image.pil import PilImage
-from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-from reportlab.lib.units import cm
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 import streamlit as st
 import weasyprint
 
-from database import init_supabase
 from verifactu_utils import generar_qr_verifactu
 
 # -----------------------------------------------------------
-# PLANTILLA DE FACTURA (con leyenda Veri*Factu)
+# PLANTILLA DE FACTURA
 # -----------------------------------------------------------
 DEFAULT_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="es">
@@ -185,6 +178,8 @@ td.amount {
     font-size: 9px;
     color: #4a5568;
 }
+ul { margin-left: 15px; padding-left: 5px; }
+li { margin-bottom: 3px; }
 </style>
 </head>
 <body>
@@ -241,7 +236,7 @@ NIF: {{ client.tax_id }}<br>
 <tbody>
 {% for item in lineas %}
 <tr>
-<td>{{ item.description }}</td>
+<td>{{ item.description_html|safe }}</td>
 <td>{{ item.quantity }}</td>
 <td class="amount">{{ "%.2f"|format(item.unit_price) }} €</td>
 <td class="amount">{{ "%.2f"|format(item.base_amount) }} €</td>
@@ -280,7 +275,7 @@ Sistema de facturación verificable / VERI*FACTU - Factura verificable en la sed
 </html>"""
 
 # -----------------------------------------------------------
-# PLANTILLA DE PRESUPUESTO HTML (Fallback)
+# PLANTILLA DE PRESUPUESTO HTML
 # -----------------------------------------------------------
 BUDGET_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="es">
@@ -289,97 +284,126 @@ BUDGET_TEMPLATE = r"""<!DOCTYPE html>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
-    font-family: 'Helvetica', 'Arial', sans-serif;
+    font-family: 'Segoe UI', 'Helvetica', 'Arial', sans-serif;
     color: #2d3748;
-    margin: 1cm;
-    font-size: 10px;
+    margin: 1.5cm;
+    font-size: 11px;
 }
 .header {
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
-    border-bottom: 2px solid #1e3a8a;
-    padding-bottom: 8px;
-    margin-bottom: 12px;
+    border-bottom: 3px solid #1e3a8a;
+    padding-bottom: 15px;
+    margin-bottom: 20px;
+}
+.logo-container {
+    flex: 0 0 auto;
+    margin-right: 20px;
+}
+.logo-container img {
+    max-width: 200px;
+    max-height: 90px;
+    width: auto;
+    height: auto;
 }
 .company-info {
-    text-align: left;
+    text-align: right;
     flex: 1;
 }
 .company-info h1 {
     color: #1e3a8a;
-    font-size: 16px;
+    font-size: 22px;
     font-weight: 700;
-    margin-bottom: 2px;
+    margin-bottom: 4px;
 }
 .company-info p {
-    font-size: 8px;
-    line-height: 1.2;
+    font-size: 10px;
+    line-height: 1.4;
     color: #4a5568;
-    margin-bottom: 1px;
+}
+.document-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 20px;
 }
 .document-title {
     color: #1e3a8a;
-    font-size: 18px;
+    font-size: 24px;
     font-weight: 700;
-    margin: 8px 0 4px 0;
-    text-align: center;
 }
 .client-section {
-    margin: 8px 0;
-    padding: 8px 10px;
+    margin: 15px 0;
+    padding: 12px 15px;
     background-color: #f7fafc;
-    border-left: 3px solid #1e3a8a;
-    border-radius: 3px;
-    font-size: 9px;
+    border-left: 4px solid #1e3a8a;
+    border-radius: 4px;
+    font-size: 11px;
+}
+.client-section strong {
+    color: #1e3a8a;
+    font-size: 12px;
+    display: block;
+    margin-bottom: 4px;
 }
 table {
     width: 100%;
     border-collapse: collapse;
-    margin: 8px 0;
-    font-size: 9px;
+    margin: 20px 0;
+    font-size: 10px;
 }
 th {
     background-color: #1e3a8a;
     color: white;
-    padding: 5px;
+    padding: 8px 10px;
     text-align: left;
     font-weight: 600;
 }
 td {
-    padding: 5px;
+    padding: 8px 10px;
     border-bottom: 1px solid #e2e8f0;
     vertical-align: top;
-    font-size: 8px;
-    line-height: 1.3;
+    line-height: 1.4;
+}
+td.amount {
+    text-align: right;
+    white-space: nowrap;
+}
+ul {
+    margin-left: 15px;
+    padding-left: 5px;
+}
+li {
+    margin-bottom: 2px;
 }
 .totals {
-    width: 35%;
+    width: 40%;
     margin-left: auto;
-    margin-top: 8px;
+    margin-top: 15px;
     background-color: #f7fafc;
-    padding: 8px 10px;
-    border-radius: 4px;
-    font-size: 9px;
+    padding: 12px 15px;
+    border-radius: 6px;
+    font-size: 11px;
 }
 .totals p {
-    margin-bottom: 3px;
+    margin-bottom: 5px;
     display: flex;
     justify-content: space-between;
 }
 .totals .total-final {
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 700;
     color: #1e3a8a;
     border-top: 1px solid #cbd5e0;
-    padding-top: 3px;
-    margin-top: 3px;
+    padding-top: 5px;
+    margin-top: 5px;
 }
 .footer {
-    margin-top: 15px;
-    font-size: 7px;
+    margin-top: 40px;
+    font-size: 9px;
     border-top: 1px solid #e2e8f0;
-    padding-top: 5px;
+    padding-top: 10px;
     text-align: center;
     color: #718096;
 }
@@ -387,51 +411,67 @@ td {
 </head>
 <body>
 <div class="header">
+{% if company.company_logo %}
+<div class="logo-container">
+    <img src="{{ company.company_logo }}" alt="Logo">
+</div>
+{% endif %}
 <div class="company-info">
-<h1>{{ company.company_name }}</h1>
-<p>{{ company.company_address }}</p>
-<p>NIF: {{ company.company_tax_id }}</p>
+    <h1>{{ company.company_name }}</h1>
+    <p>{{ company.company_address }}</p>
+    <p>NIF: {{ company.company_tax_id }}</p>
+    {% if company.company_phone or company.company_email %}
+    <p>Tel: {{ company.company_phone }} | Email: {{ company.company_email }}</p>
+    {% endif %}
 </div>
 </div>
 
-<div class="document-title">PRESUPUESTO {{ budget_number }}</div>
+<div class="document-header">
+    <div>
+        <div class="document-title">PRESUPUESTO</div>
+        <p style="font-size: 13px; color: #4a5568;">Nº {{ budget_number }}</p>
+    </div>
+    <div style="text-align: right; font-size: 11px;">
+        <p><strong>Fecha:</strong> {{ date_today }}</p>
+    </div>
+</div>
 
 <div class="client-section">
-<strong>DATOS DEL CLIENTE</strong><br>
-{{ client.name }}<br>
-NIF: {{ client.tax_id }}<br>
-{{ client.address }}
+    <strong>DATOS DEL CLIENTE</strong>
+    {{ client.name }}<br>
+    {% if client.tax_id %}NIF: {{ client.tax_id }}<br>{% endif %}
+    {{ client.address }}
 </div>
 
 <table>
 <thead>
 <tr>
-<th style="width:55%">Descripción</th>
-<th style="width:10%">Cant.</th>
-<th style="width:15%">Precio ud.</th>
-<th style="width:20%">Total</th>
+    <th style="width: 55%;">Descripción</th>
+    <th style="width: 10%; text-align: center;">Cant.</th>
+    <th style="width: 15%; text-align: right;">Precio ud.</th>
+    <th style="width: 20%; text-align: right;">Total</th>
 </tr>
 </thead>
 <tbody>
 {% for item in lineas %}
 <tr>
-<td>{{ item.description }}</td>
-<td>{{ item.quantity }}</td>
-<td>{{ "%.2f"|format(item.unit_price) }} €</td>
-<td>{{ "%.2f"|format(item.total) }} €</td>
+    <td>{{ item.description_html|safe }}</td>
+    <td style="text-align: center;">{{ item.quantity }}</td>
+    <td class="amount">{{ "%.2f"|format(item.unit_price) }} €</td>
+    <td class="amount"><strong>{{ "%.2f"|format(item.total) }} €</strong></td>
 </tr>
 {% endfor %}
 </tbody>
 </table>
 
 <div class="totals">
-<p><span>Base imponible:</span> <span>{{ "%.2f"|format(base_total) }} €</span></p>
-<p><span>IVA ({{ vat_pct }}%):</span> <span>{{ "%.2f"|format(vat_total) }} €</span></p>
-<p class="total-final"><span>TOTAL:</span> <span>{{ "%.2f"|format(total) }} €</span></p>
+    <p><span>Base imponible:</span> <span>{{ "%.2f"|format(base_total) }} €</span></p>
+    <p><span>IVA ({{ vat_pct }}%):</span> <span>{{ "%.2f"|format(vat_total) }} €</span></p>
+    <p class="total-final"><span>TOTAL:</span> <span>{{ "%.2f"|format(total) }} €</span></p>
 </div>
 
 <div class="footer">
-Presupuesto válido por 30 días · Gracias por confiar en nosotros
+    Presupuesto válido por 30 días · Gracias por confiar en nosotros
 </div>
 </body>
 </html>"""
@@ -447,8 +487,23 @@ def _logo_sanitized(url):
         return ""
     return url
 
+def _process_description(desc_text):
+    """Limpia caracteres duplicados (•, ■, -) y los transforma en HTML limpio."""
+    if not desc_text:
+        return ""
+    lines = [l.strip() for l in str(desc_text).strip().split('\n') if l.strip()]
+    has_bullets = any(re.match(r'^[•\-\■]\s*', l) for l in lines)
+    
+    if has_bullets:
+        html_items = []
+        for line in lines:
+            clean_line = re.sub(r'^[•\-\■]\s*', '', line)
+            html_items.append(f"<li>{clean_line}</li>")
+        return f"<ul>{''.join(html_items)}</ul>"
+    else:
+        return "<br>".join(lines)
+
 def get_qr_base64(invoice, client, company_config):
-    """Genera el código QR de Veri*Factu para las facturas."""
     invoice_number = invoice.get('invoice_number', '')
     if '-' in invoice_number:
         parts = invoice_number.split('-')
@@ -481,32 +536,11 @@ def get_qr_base64(invoice, client, company_config):
     return base64.b64encode(buffered.getvalue()).decode()
 
 def _html_to_pdf(html_str):
-    """Convierte cadenas HTML a PDF mediante WeasyPrint."""
     try:
         return weasyprint.HTML(string=html_str).write_pdf()
     except Exception as e:
         st.error(f"Error generando PDF: {e}")
         return None
-
-def _process_description(desc_text):
-    """Convierte listas con viñetas en HTML estructurado."""
-    if not desc_text:
-        return ""
-    paragraphs = re.split(r'\n\s*\n', desc_text.strip())
-    html_parts = []
-    for para in paragraphs:
-        lines = para.split('\n')
-        if all(re.match(r'^\s*[•-]\s', line) for line in lines if line.strip()):
-            ul_items = []
-            for line in lines:
-                if line.strip():
-                    content = re.sub(r'^\s*[•-]\s*', '', line)
-                    ul_items.append(f'<li>{content}</li>')
-            html_parts.append('<ul>' + ''.join(ul_items) + '</ul>')
-        else:
-            text_with_br = '<br>'.join(lines)
-            html_parts.append(f'<p>{text_with_br}</p>')
-    return ''.join(html_parts)
 
 # -----------------------------------------------------------
 # Generación de PDF de Factura (WeasyPrint)
@@ -518,10 +552,12 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
 
     company_safe = dict(company_config)
     company_safe["company_logo"] = _logo_sanitized(company_safe.get("company_logo", ""))
-    company_safe.setdefault("company_phone", "")
-    company_safe.setdefault("company_email", "")
-    company_safe.setdefault("es_rectificativa", False)
-    company_safe.setdefault("factura_original_num", None)
+
+    lineas_processed = []
+    for item in (lineas or []):
+        item_copy = dict(item)
+        item_copy['description_html'] = _process_description(item.get('description', ''))
+        lineas_processed.append(item_copy)
 
     if template_css.strip():
         if "<head" in template_html.lower():
@@ -538,313 +574,34 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         client=client or {},
         company=company_safe,
         qr_base64=qr_base64,
-        lineas=lineas or []
+        lineas=lineas_processed
     )
     return _html_to_pdf(html_str)
 
 # -----------------------------------------------------------
-# Generación de PDF de Presupuesto (ReportLab)
+# Generación de PDF de Presupuesto (WeasyPrint con Logo)
 # -----------------------------------------------------------
 def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_pct, budget_number=None):
-    PAGE_WIDTH, PAGE_HEIGHT = A4
-    MARGIN_LEFT = 1.2 * cm
-    MARGIN_RIGHT = 1.2 * cm
-    MARGIN_TOP = 1.0 * cm
-    MARGIN_BOTTOM = 1.0 * cm
-    
-    PRINTABLE_WIDTH = PAGE_WIDTH - MARGIN_LEFT - MARGIN_RIGHT
-    
-    styles = getSampleStyleSheet()
-    
-    company_style = ParagraphStyle(
-        'CompanyStyle',
-        parent=styles['Heading2'],
-        fontSize=14,
-        leading=16,
-        textColor=colors.HexColor('#1E3A8A'),
-        spaceAfter=2,
+    company_safe = dict(company)
+    company_safe["company_logo"] = _logo_sanitized(company_safe.get("company_logo", ""))
+
+    lineas_processed = []
+    for item in lineas:
+        item_copy = dict(item)
+        item_copy['description_html'] = _process_description(item.get('description', ''))
+        item_copy['total'] = item.get('total', item.get('base_amount', 0))
+        lineas_processed.append(item_copy)
+
+    template = Template(BUDGET_TEMPLATE)
+    html_str = template.render(
+        company=company_safe,
+        client=client or {},
+        lineas=lineas_processed,
+        base_total=base_total,
+        vat_total=vat_total,
+        total=total,
+        vat_pct=vat_pct or 0,
+        budget_number=budget_number or "---",
+        date_today=date.today().strftime('%d/%m/%Y')
     )
-    
-    company_info_style = ParagraphStyle(
-        'CompanyInfoStyle',
-        parent=styles['Normal'],
-        fontSize=8,
-        leading=10,
-        textColor=colors.HexColor('#4A5568'),
-        spaceAfter=1,
-    )
-    
-    title_style = ParagraphStyle(
-        'TitleStyle',
-        parent=styles['Title'],
-        fontSize=16,
-        leading=18,
-        textColor=colors.HexColor('#1E3A8A'),
-        spaceAfter=4,
-        alignment=TA_CENTER,
-    )
-    
-    number_style = ParagraphStyle(
-        'NumberStyle',
-        parent=styles['Normal'],
-        fontSize=10,
-        leading=12,
-        textColor=colors.HexColor('#2D3748'),
-        spaceAfter=2,
-        alignment=TA_CENTER,
-    )
-    
-    desc_style = ParagraphStyle(
-        'DescStyle',
-        parent=styles['Normal'],
-        fontSize=8,
-        leading=10,
-        textColor=colors.HexColor('#2D3748'),
-        alignment=TA_LEFT,
-    )
-    
-    num_style = ParagraphStyle(
-        'NumStyle',
-        parent=styles['Normal'],
-        fontSize=8,
-        leading=10,
-        textColor=colors.HexColor('#2D3748'),
-        alignment=TA_RIGHT,
-    )
-    
-    total_label_style = ParagraphStyle(
-        'TotalLabelStyle',
-        parent=styles['Normal'],
-        fontSize=9,
-        leading=11,
-        textColor=colors.HexColor('#2D3748'),
-        alignment=TA_LEFT,
-    )
-    
-    total_value_style = ParagraphStyle(
-        'TotalValueStyle',
-        parent=styles['Normal'],
-        fontSize=9,
-        leading=11,
-        textColor=colors.HexColor('#1E3A8A'),
-        alignment=TA_RIGHT,
-        fontName='Helvetica-Bold',
-    )
-    
-    total_final_style = ParagraphStyle(
-        'TotalFinalStyle',
-        parent=styles['Normal'],
-        fontSize=12,
-        leading=14,
-        textColor=colors.HexColor('#1E3A8A'),
-        alignment=TA_RIGHT,
-        fontName='Helvetica-Bold',
-    )
-    
-    footer_style = ParagraphStyle(
-        'FooterStyle',
-        parent=styles['Normal'],
-        fontSize=7,
-        leading=9,
-        textColor=colors.HexColor('#718096'),
-        alignment=TA_CENTER,
-    )
-    
-    def fmt_money(valor):
-        try:
-            return f"{float(valor):,.2f} €"
-        except (ValueError, TypeError):
-            return "0.00 €"
-    
-    def process_description(desc_text):
-        if not desc_text:
-            return ""
-        desc_text = str(desc_text).strip()
-        lines = desc_text.split('\n')
-        html_parts = []
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            if line.startswith('-') or line.startswith('•'):
-                content = line[1:].strip()
-                html_parts.append(f'• {content}')
-            else:
-                html_parts.append(line)
-        return '<br/>'.join(html_parts)
-    
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(
-        buffer,
-        pagesize=A4,
-        leftMargin=MARGIN_LEFT,
-        rightMargin=MARGIN_RIGHT,
-        topMargin=MARGIN_TOP,
-        bottomMargin=MARGIN_BOTTOM,
-    )
-    
-    story = []
-    
-    company_name = company.get('company_name', 'Empresa')
-    company_tax_id = company.get('company_tax_id', '')
-    company_address = company.get('company_address', '')
-    
-    client_name = client.get('name', 'Cliente')
-    client_address = client.get('address', '')
-    budget_num = budget_number or '---'
-    
-    header_data = [
-        [
-            Paragraph(company_name, company_style),
-            Paragraph(f"<b>Nº:</b> {budget_num}", company_info_style)
-        ],
-        [
-            Paragraph(f"NIF: {company_tax_id}", company_info_style),
-            Paragraph(f"Fecha: {date.today().strftime('%d/%m/%Y')}", company_info_style)
-        ],
-        [
-            Paragraph(company_address, company_info_style),
-            Paragraph("", company_info_style)
-        ],
-    ]
-    
-    header_table = Table(header_data, colWidths=[PRINTABLE_WIDTH*0.7, PRINTABLE_WIDTH*0.3])
-    header_table.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
-    ]))
-    
-    story.append(header_table)
-    story.append(Spacer(1, 8))
-    
-    story.append(Paragraph("PRESUPUESTO", title_style))
-    story.append(Paragraph(f"Cliente: {client_name}", number_style))
-    if client_address:
-        story.append(Paragraph(client_address, company_info_style))
-    story.append(Spacer(1, 6))
-    
-    line_table = Table([['']], colWidths=[PRINTABLE_WIDTH], rowHeights=[1])
-    line_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#1E3A8A')),
-    ]))
-    story.append(line_table)
-    story.append(Spacer(1, 8))
-    
-    col_desc_width = PRINTABLE_WIDTH * 0.55
-    col_qty_width = PRINTABLE_WIDTH * 0.10
-    col_price_width = PRINTABLE_WIDTH * 0.15
-    col_total_width = PRINTABLE_WIDTH * 0.20
-    
-    col_widths = [col_desc_width, col_qty_width, col_price_width, col_total_width]
-    
-    headers = [
-        Paragraph('<b>Descripción</b>', num_style),
-        Paragraph('<b>Cant.</b>', num_style),
-        Paragraph('<b>Precio ud.</b>', num_style),
-        Paragraph('<b>Total</b>', num_style),
-    ]
-    
-    rows = [headers]
-    
-    for linea in lineas:
-        desc = linea.get('description', '')
-        qty = linea.get('quantity', 1)
-        price = linea.get('unit_price', 0)
-        line_total = linea.get('total', linea.get('base_amount', 0))
-        
-        desc_html = process_description(desc)
-        
-        rows.append([
-            Paragraph(desc_html, desc_style),
-            Paragraph(f"{float(qty):.0f}", num_style),
-            Paragraph(fmt_money(price), num_style),
-            Paragraph(fmt_money(line_total), num_style),
-        ])
-    
-    lines_table = Table(rows, colWidths=col_widths, repeatRows=1)
-    
-    table_style = [
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1E3A8A')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 8),
-        ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('TOPPADDING', (0, 0), (-1, -1), 3),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-        ('LEFTPADDING', (0, 0), (-1, -1), 4),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 4),
-        ('FONTSIZE', (0, 1), (-1, -1), 8),
-        ('ALIGN', (1, 1), (-1, -1), 'RIGHT'),
-        ('VALIGN', (0, 1), (-1, -1), 'TOP'),
-        ('LINEBELOW', (0, 0), (-1, 0), 0.5, colors.HexColor('#1E3A8A')),
-        ('LINEBELOW', (0, 1), (-1, -1), 0.3, colors.HexColor('#E2E8F0')),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F7FAFC')]),
-    ]
-    
-    lines_table.setStyle(TableStyle(table_style))
-    story.append(lines_table)
-    story.append(Spacer(1, 8))
-    
-    vat_pct_display = vat_pct or 0
-    totals_width = PRINTABLE_WIDTH * 0.35
-    totals_left_offset = PRINTABLE_WIDTH - totals_width
-    
-    totals_data = [
-        [Paragraph('Base imponible:', total_label_style), Paragraph(fmt_money(base_total), total_value_style)],
-        [Paragraph(f'IVA ({vat_pct_display:.1f}%):', total_label_style), Paragraph(fmt_money(vat_total), total_value_style)],
-    ]
-    
-    irpf_total = sum(l.get('irpf_amount', 0) for l in lineas)
-    if irpf_total > 0:
-        irpf_pct = lineas[0].get('irpf_percentage', 0) if lineas else 0
-        totals_data.append([
-            Paragraph(f'IRPF ({irpf_pct:.1f}%):', total_label_style),
-            Paragraph(f'-{fmt_money(irpf_total)}', total_value_style)
-        ])
-    
-    totals_data.append([Paragraph('', total_label_style), Paragraph('', total_label_style)])
-    totals_data.append([
-        Paragraph('<b>TOTAL:</b>', total_final_style),
-        Paragraph(f'<b>{fmt_money(total)}</b>', total_final_style),
-    ])
-    
-    totals_table = Table(totals_data, colWidths=[totals_width * 0.45, totals_width * 0.55])
-    totals_table.setStyle(TableStyle([
-        ('ALIGN', (0, 0), (0, -1), 'LEFT'),
-        ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('TOPPADDING', (0, 0), (-1, -1), 2),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
-        ('LEFTPADDING', (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-        ('LINEABOVE', (0, -2), (-1, -2), 0.5, colors.HexColor('#1E3A8A')),
-    ]))
-    
-    totals_wrapper = Table(
-        [['', totals_table]],
-        colWidths=[totals_left_offset, totals_width]
-    )
-    totals_wrapper.setStyle(TableStyle([
-        ('LEFTPADDING', (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-        ('TOPPADDING', (0, 0), (-1, -1), 0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
-    ]))
-    
-    story.append(totals_wrapper)
-    story.append(Spacer(1, 10))
-    
-    story.append(Paragraph(
-        "Presupuesto válido por 30 días · Gracias por confiar en nosotros",
-        footer_style
-    ))
-    
-    doc.build(story)
-    pdf_bytes = buffer.getvalue()
-    buffer.close()
-    
-    return pdf_bytes
+    return _html_to_pdf(html_str)
