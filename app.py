@@ -2477,197 +2477,8 @@ elif menu == "📊 Dashboards":
 
  
 # ════════════════════════════════════════════════════════════
-# PRESUPUESTOS (Edición funcional + Vista previa profesional + PDF correcto)
+# PRESUPUESTOS (CORREGIDO - Edición + Vista Previa + PDF correcto)
 # ════════════════════════════════════════════════════════════
-import io
-import json
-import time
-from datetime import date, datetime
-import pandas as pd
-import streamlit as st
-from reportlab.lib.pagesizes import A4
-from reportlab.lib import colors
-from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether
-)
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import cm
-
-# ============================================================
-# FUNCIÓN GENERADORA DE PDF DE PRESUPUESTO
-# ============================================================
-def make_budget_pdf(empresa, cliente, lineas, base_total, vat_total, total, vat_pct=21.0, budget_number="P-0000"):
-    buffer = io.BytesIO()
-    
-    doc = SimpleDocTemplate(
-        buffer,
-        pagesize=A4,
-        leftMargin=1.5 * cm,
-        rightMargin=1.5 * cm,
-        topMargin=1.5 * cm,
-        bottomMargin=1.5 * cm
-    )
-    
-    styles = getSampleStyleSheet()
-    
-    title_style = ParagraphStyle(
-        'DocTitle',
-        parent=styles['Heading1'],
-        fontSize=14,
-        leading=16,
-        textColor=colors.HexColor("#1A365D"),
-        spaceAfter=4
-    )
-    
-    body_style = ParagraphStyle(
-        'DocBody',
-        parent=styles['Normal'],
-        fontSize=8.5,
-        leading=11,
-        textColor=colors.HexColor("#2D3748")
-    )
-    
-    bold_style = ParagraphStyle(
-        'DocBold',
-        parent=body_style,
-        fontName='Helvetica-Bold'
-    )
-    
-    desc_style = ParagraphStyle(
-        'DescStyle',
-        parent=body_style,
-        fontSize=8,
-        leading=10,
-        textColor=colors.HexColor("#2D3748")
-    )
-    
-    table_header_style = ParagraphStyle(
-        'TableHeader',
-        parent=body_style,
-        fontName='Helvetica-Bold',
-        textColor=colors.white,
-        fontSize=8.5,
-        leading=10
-    )
-
-    story = []
-
-    # 1. Cabecera (Empresa y Cliente)
-    empresa_info = f"""
-    <b>{empresa.get('company_name', 'Empresa')}</b><br/>
-    NIF/CIF: {empresa.get('company_tax_id', '')}<br/>
-    {empresa.get('company_address', '')}<br/>
-    {f"Tel: {empresa.get('company_phone', '')}<br/>" if empresa.get('company_phone') else ''}
-    {f"Email: {empresa.get('company_email', '')}" if empresa.get('company_email') else ''}
-    """
-    
-    cliente_info = f"""
-    <b>DATOS DEL CLIENTE:</b><br/>
-    <b>{cliente.get('name', 'Cliente')}</b><br/>
-    NIF/CIF: {cliente.get('tax_id', '')}<br/>
-    {cliente.get('address', '')}
-    """
-    
-    header_table = Table(
-        [[Paragraph(empresa_info.strip(), body_style), Paragraph(cliente_info.strip(), body_style)]],
-        colWidths=[255, 255]
-    )
-    header_table.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
-        ('TOPPADDING', (0, 0), (-1, -1), 0),
-    ]))
-    
-    story.append(header_table)
-    story.append(Spacer(1, 10))
-
-    # 2. Datos del Presupuesto
-    fecha_str = date.today().strftime("%d/%m/%Y")
-    story.append(Paragraph(f"<b>PRESUPUESTO {budget_number}</b>", title_style))
-    story.append(Paragraph(f"<b>Fecha de emisión:</b> {fecha_str}", body_style))
-    story.append(Spacer(1, 10))
-
-    # 3. Tabla de Líneas
-    table_data = [
-        [
-            Paragraph("Descripción / Concepto", table_header_style),
-            Paragraph("Cant.", table_header_style),
-            Paragraph("Precio Ud.", table_header_style),
-            Paragraph("Total", table_header_style)
-        ]
-    ]
-
-    for item in lineas:
-        desc_formatted = str(item.get("description", "")).replace("\n", "<br/>")
-        cant_val = float(item.get("quantity", 1))
-        precio_val = float(item.get("unit_price", 0))
-        total_val = float(item.get("total", cant_val * precio_val))
-
-        table_data.append([
-            Paragraph(desc_formatted, desc_style),
-            Paragraph(f"{cant_val:,.2f}".replace(",", "@").replace(".", ",").replace("@", "."), body_style),
-            Paragraph(f"{precio_val:,.2f} €".replace(",", "@").replace(".", ",").replace("@", "."), body_style),
-            Paragraph(f"{total_val:,.2f} €".replace(",", "@").replace(".", ",").replace("@", "."), body_style)
-        ])
-
-    items_table = Table(table_data, colWidths=[310, 45, 75, 80])
-    items_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#1A365D")),
-        ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E0")),
-        ('TOPPADDING', (0, 0), (-1, -1), 4),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-        ('LEFTPADDING', (0, 0), (-1, -1), 5),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 5),
-    ]))
-    
-    story.append(items_table)
-    story.append(Spacer(1, 10))
-
-    # 4. Resumen de Totales
-    def fmt_money(val):
-        return f"{float(val):,.2f} €".replace(",", "@").replace(".", ",").replace("@", ".")
-
-    totales_data = [
-        [Paragraph("Base Imponible:", body_style), Paragraph(fmt_money(base_total), body_style)],
-        [Paragraph(f"IVA ({vat_pct:.2f}%):", body_style), Paragraph(fmt_money(vat_total), body_style)]
-    ]
-    
-    irpf_val = sum(float(l.get("irpf_amount", 0)) for l in lineas) if lineas else 0.0
-    if irpf_val > 0:
-        totales_data.append([Paragraph("Retención IRPF:", body_style), Paragraph(f"-{fmt_money(irpf_val)}", body_style)])
-
-    totales_data.append([Paragraph("<b>TOTAL:</b>", bold_style), Paragraph(f"<b>{fmt_money(total)}</b>", bold_style)])
-
-    totales_table = Table(totales_data, colWidths=[120, 80])
-    totales_table.setStyle(TableStyle([
-        ('ALIGN', (0, 0), (-1, -1), 'RIGHT'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 2),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
-        ('LINEABOVE', (0, -1), (-1, -1), 1, colors.HexColor("#1A365D")),
-    ]))
-
-    wrapper_table = Table([["", totales_table]], colWidths=[310, 200])
-    wrapper_table.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-    ]))
-
-    story.append(KeepTogether([wrapper_table]))
-
-    doc.build(story)
-    buffer.seek(0)
-    return buffer.getvalue()
-
-
-# ============================================================
-# MÓDULO PRESUPUESTOS (STREAMLIT)
-# ============================================================
 elif menu == "📝 Presupuestos":
     st.title("📝 Presupuestos")
     
@@ -2678,10 +2489,31 @@ elif menu == "📝 Presupuestos":
             if "user_id" not in empresa:
                 empresa["user_id"] = user_id
         else:
-            empresa = {"user_id": user_id, "company_name": AUTONOMO_NAME, "company_tax_id": AUTONOMO_TAX_ID, "company_address": AUTONOMO_ADDRESS, "company_iban": AUTONOMO_IBAN, "company_phone": "", "company_email": "", "company_logo": ""}
+            empresa = {
+                "user_id": user_id, 
+                "company_name": AUTONOMO_NAME, 
+                "company_tax_id": AUTONOMO_TAX_ID, 
+                "company_address": AUTONOMO_ADDRESS, 
+                "company_iban": AUTONOMO_IBAN, 
+                "company_phone": "", 
+                "company_email": "", 
+                "company_logo": ""
+            }
     except Exception:
-        empresa = {"user_id": user_id, "company_name": AUTONOMO_NAME, "company_tax_id": AUTONOMO_TAX_ID, "company_address": AUTONOMO_ADDRESS, "company_iban": AUTONOMO_IBAN, "company_phone": "", "company_email": "", "company_logo": ""}
+        empresa = {
+            "user_id": user_id, 
+            "company_name": AUTONOMO_NAME, 
+            "company_tax_id": AUTONOMO_TAX_ID, 
+            "company_address": AUTONOMO_ADDRESS, 
+            "company_iban": AUTONOMO_IBAN, 
+            "company_phone": "", 
+            "company_email": "", 
+            "company_logo": ""
+        }
 
+    # ============================================================
+    # GESTIÓN DE ESTADO PARA EDICIÓN
+    # ============================================================
     if "editing_budget_id" not in st.session_state:
         st.session_state.editing_budget_id = None
     if "edit_budget_data" not in st.session_state:
@@ -2690,6 +2522,7 @@ elif menu == "📝 Presupuestos":
         st.session_state.budget_number_editing = None
 
     def limpiar_estado_edicion():
+        """Limpia el estado de edición para volver a modo crear."""
         st.session_state.editing_budget_id = None
         st.session_state.edit_budget_data = None
         st.session_state.budget_number_editing = None
@@ -2704,6 +2537,9 @@ elif menu == "📝 Presupuestos":
                 if col not in productos_df.columns:
                     productos_df[col] = "" if col == "description" else 0.0
 
+        # ============================================================
+        # INDICADOR DE MODO EDICIÓN
+        # ============================================================
         if st.session_state.editing_budget_id and st.session_state.edit_budget_data:
             st.warning(f"✏️ **Editando presupuesto {st.session_state.budget_number_editing}** - Modifica los campos y guarda los cambios.")
             if st.button("❌ Cancelar edición", key="cancel_edit_btn"):
@@ -2712,6 +2548,9 @@ elif menu == "📝 Presupuestos":
         else:
             st.info("➕ Creando nuevo presupuesto")
 
+        # ============================================================
+        # CARGAR DATOS PARA EDICIÓN O VALORES POR DEFECTO
+        # ============================================================
         if st.session_state.editing_budget_id and st.session_state.edit_budget_data:
             budget_data = st.session_state.edit_budget_data
             cliente_pre = {
@@ -2723,7 +2562,7 @@ elif menu == "📝 Presupuestos":
             fecha_pre = budget_data.get("date", str(date.today()))
             try:
                 fecha_pre_dt = datetime.strptime(fecha_pre, "%Y-%m-%d").date()
-            except:
+            except Exception:
                 fecha_pre_dt = date.today()
             vat_pct_pre = float(budget_data.get("vat_pct", 21.0))
             irpf_pct_pre = float(budget_data.get("irpf_pct", 0.0))
@@ -2833,8 +2672,8 @@ elif menu == "📝 Presupuestos":
                 if prod_sel != "-- Manual --" and not productos_df.empty:
                     prod_row = productos_df[productos_df["name"] == prod_sel]
                     if not prod_row.empty:
-                        precio_default = prod_row.iloc[0]["price"]
-                        vat_default = prod_row.iloc[0]["default_vat_percentage"]
+                        precio_default = float(prod_row.iloc[0]["price"])
+                        vat_default = float(prod_row.iloc[0]["default_vat_percentage"])
                         irpf_default = 0.0
                     else:
                         precio_default = float(lin_pre["unit_price"]) if lin_pre else 0.0
@@ -2886,6 +2725,9 @@ elif menu == "📝 Presupuestos":
         else:
             base_total = vat_total = irpf_total = total = 0.0
 
+        # ============================================================
+        # VISTA PREVIA PROFESIONAL
+        # ============================================================
         st.markdown("---")
         st.subheader("🔍 Vista previa del presupuesto")
         
@@ -2918,20 +2760,10 @@ elif menu == "📝 Presupuestos":
                 vista_df["IVA €"] = vista_df["IVA €"].apply(lambda x: f"{x:,.2f} €")
                 vista_df["Total"] = vista_df["Total"].apply(lambda x: f"{x:,.2f} €")
                 
-                column_config_preview = {
-                    "Descripción": st.column_config.TextColumn("Descripción", width="large"),
-                    "Cant.": st.column_config.NumberColumn("Cant.", width="small"),
-                    "Precio ud.": st.column_config.TextColumn("Precio ud.", width="small"),
-                    "IVA %": st.column_config.NumberColumn("IVA %", width="small"),
-                    "IVA €": st.column_config.TextColumn("IVA €", width="small"),
-                    "Total": st.column_config.TextColumn("Total", width="small"),
-                }
-                
                 st.dataframe(
                     vista_df,
                     hide_index=True,
-                    use_container_width=True,
-                    column_config=column_config_preview
+                    use_container_width=True
                 )
             
             st.markdown("---")
@@ -2949,10 +2781,13 @@ elif menu == "📝 Presupuestos":
 
         st.markdown("---")
         
+        # ============================================================
+        # BOTONES DE ACCIÓN
+        # ============================================================
         col_acc1, col_acc2 = st.columns(2)
         
         with col_acc1:
-            if st.button("💾 Guardar presupuesto", key="guardar_presupuesto_edit"):
+            if st.button("💾 Guardar presupuesto", key="guardar_presupuesto_edit", use_container_width=True):
                 if not validar_nif_cif(cliente.get("tax_id", "")):
                     st.error("El NIF del cliente no es válido.")
                 else:
@@ -3007,60 +2842,60 @@ elif menu == "📝 Presupuestos":
                             st.error(f"Error al guardar: {e}")
         
         with col_acc2:
-            if st.button("📄 Generar PDF del presupuesto", key="pdf_presupuesto_edit"):
-                if not validar_nif_cif(cliente.get("tax_id", "")):
-                    st.error("El NIF del cliente no es válido.")
-                else:
-                    empresa["user_id"] = user_id
-                    vat_pct = lineas[0]["vat_percentage"] if lineas else 21
-                    
-                    if st.session_state.editing_budget_id and st.session_state.budget_number_editing:
-                        numero_pdf = st.session_state.budget_number_editing
-                    else:
-                        numero_pdf = obtener_siguiente_numero_presupuesto(user_id)
-                    
-                    cliente_pdf = {
-                        "name": cliente.get("name", ""),
-                        "tax_id": cliente.get("tax_id", ""),
-                        "address": cliente.get("address", "")
-                    }
-                    
-                    if empresa and cliente_pdf and lineas:
-                        pdf_bytes = make_budget_pdf(
-                            empresa, cliente_pdf, lineas,
-                            base_total, vat_total, total,
-                            vat_pct, budget_number=numero_pdf
-                        )
-                        if pdf_bytes:
-                            st.download_button(
-                                "⬇️ Descargar PDF",
-                                pdf_bytes,
-                                f"Presupuesto_{numero_pdf}.pdf",
-                                mime="application/pdf",
-                                key="download_pdf_edit"
-                            )
-                            destinatario = st.text_input(
-                                "Email para enviar presupuesto",
-                                key="email_presupuesto_edit",
-                                placeholder="cliente@ejemplo.com"
-                            )
-                            if st.button("📧 Enviar por email", key="send_budget_email_edit"):
-                                if not destinatario or "@" not in destinatario:
-                                    st.error("Introduce un email válido.")
-                                else:
-                                    with st.spinner("Enviando..."):
-                                        exito = enviar_factura_email(
-                                            destinatario,
-                                            f"Presupuesto {numero_pdf}",
-                                            "Adjunto le enviamos el presupuesto.",
-                                            pdf_bytes,
-                                            f"Presupuesto_{numero_pdf}.pdf"
-                                        )
-                                    if exito:
-                                        st.success("Presupuesto enviado correctamente")
-                                    else:
-                                        st.error("No se pudo enviar el email")
+            empresa["user_id"] = user_id
+            vat_pct = lineas[0]["vat_percentage"] if lineas else 21
+            numero_pdf = st.session_state.budget_number_editing or obtener_siguiente_numero_presupuesto(user_id)
+            
+            cliente_pdf = {
+                "name": cliente.get("name", ""),
+                "tax_id": cliente.get("tax_id", ""),
+                "address": cliente.get("address", "")
+            }
+            
+            pdf_bytes = None
+            if validar_nif_cif(cliente.get("tax_id", "")) and lineas:
+                pdf_bytes = make_budget_pdf(
+                    empresa, cliente_pdf, lineas,
+                    base_total, vat_total, total,
+                    vat_pct, budget_number=numero_pdf
+                )
 
+            if pdf_bytes:
+                st.download_button(
+                    "⬇️ Descargar PDF",
+                    pdf_bytes,
+                    f"Presupuesto_{numero_pdf}.pdf",
+                    mime="application/pdf",
+                    key="download_pdf_edit",
+                    use_container_width=True
+                )
+                
+                with st.expander("📧 Enviar presupuesto por email"):
+                    destinatario = st.text_input(
+                        "Email del destinatario",
+                        key="email_presupuesto_edit",
+                        placeholder="cliente@ejemplo.com"
+                    )
+                    if st.button("Enviar email", key="send_budget_email_edit"):
+                        if not destinatario or "@" not in destinatario:
+                            st.error("Introduce un email válido.")
+                        else:
+                            with st.spinner("Enviando..."):
+                                exito = enviar_factura_email(
+                                    destinatario,
+                                    f"Presupuesto {numero_pdf}",
+                                    "Adjunto le enviamos el presupuesto.",
+                                    pdf_bytes,
+                                    f"Presupuesto_{numero_pdf}.pdf"
+                                )
+                            if exito:
+                                st.success("Presupuesto enviado correctamente.")
+                            else:
+                                st.error("No se pudo enviar el email.")
+
+    # ============================================================
+    # TAB HISTORIAL - CON VISTA DETALLADA LIMPIA
+    # ============================================================
     with tab_historial:
         st.subheader("Presupuestos guardados")
         budgets_df = get_budgets(user_id)
@@ -3088,7 +2923,7 @@ elif menu == "📝 Presupuestos":
                 key="budgets_table_historial"
             )
             
-            if (event.selection and event.selection.rows and len(event.selection.rows) > 0):
+            if event.selection and event.selection.rows and len(event.selection.rows) > 0:
                 selected_row = event.selection.rows[0]
                 if selected_row is not None and 0 <= selected_row < len(budgets_df):
                     budget_row = budgets_df.iloc[selected_row]
@@ -3103,6 +2938,9 @@ elif menu == "📝 Presupuestos":
                     
                     st.markdown("---")
                     
+                    # ============================================================
+                    # VISTA DETALLADA LIMPIA DENTRO DE CONTENEDOR
+                    # ============================================================
                     with st.container(border=True):
                         col_info1, col_info2 = st.columns(2)
                         
@@ -3164,10 +3002,11 @@ elif menu == "📝 Presupuestos":
                     
                     st.markdown("---")
                     
+                    # Acciones del historial
                     col1, col2, col3 = st.columns(3)
                     
                     with col1:
-                        if st.button("✏️ Editar", key=f"edit_btn_{budget_id}"):
+                        if st.button("✏️ Editar", key=f"edit_btn_{budget_id}", use_container_width=True):
                             st.session_state.editing_budget_id = budget_id
                             st.session_state.edit_budget_data = budget_data
                             st.session_state.budget_number_editing = budget_number_sel
@@ -3175,7 +3014,7 @@ elif menu == "📝 Presupuestos":
                     
                     with col2:
                         confirmado = st.checkbox("Confirmar eliminación", key=f"confirm_del_btn_{budget_id}")
-                        if st.button("🗑️ Eliminar", key=f"del_btn_{budget_id}", disabled=not confirmado):
+                        if st.button("🗑️ Eliminar", key=f"del_btn_{budget_id}", disabled=not confirmado, use_container_width=True):
                             try:
                                 supabase.table("budgets").delete().eq("id", budget_id).execute()
                                 st.success("Presupuesto eliminado.")
@@ -3187,32 +3026,33 @@ elif menu == "📝 Presupuestos":
                     
                     with col3:
                         try:
-                            cliente_pdf = {
+                            cliente_pdf_hist = {
                                 "name": budget_data.get("client_name", ""),
                                 "tax_id": budget_data.get("client_tax_id", ""),
                                 "address": budget_data.get("client_address", "")
                             }
-                            lineas_pdf = json.loads(budget_data.get("lines", "[]"))
+                            lineas_pdf_hist = json.loads(budget_data.get("lines", "[]"))
                             
-                            if st.button("📄 Descargar PDF", key=f"pdf_btn_{budget_id}"):
-                                pdf_bytes = make_budget_pdf(
-                                    empresa,
-                                    cliente_pdf,
-                                    lineas_pdf,
-                                    budget_data.get("base_total", 0),
-                                    budget_data.get("vat_total", 0),
-                                    budget_data.get("total", 0),
-                                    budget_data.get("vat_pct", 21),
-                                    budget_number=budget_number_sel
+                            pdf_bytes_hist = make_budget_pdf(
+                                empresa,
+                                cliente_pdf_hist,
+                                lineas_pdf_hist,
+                                budget_data.get("base_total", 0),
+                                budget_data.get("vat_total", 0),
+                                budget_data.get("total", 0),
+                                budget_data.get("vat_pct", 21),
+                                budget_number=budget_number_sel
+                            )
+                            
+                            if pdf_bytes_hist:
+                                st.download_button(
+                                    "📄 Descargar PDF",
+                                    pdf_bytes_hist,
+                                    f"Presupuesto_{budget_number_sel}.pdf",
+                                    mime="application/pdf",
+                                    key=f"download_hist_{budget_id}",
+                                    use_container_width=True
                                 )
-                                if pdf_bytes:
-                                    st.download_button(
-                                        "⬇️ Descargar",
-                                        pdf_bytes,
-                                        f"Presupuesto_{budget_number_sel}.pdf",
-                                        mime="application/pdf",
-                                        key=f"download_hist_{budget_id}"
-                                    )
                         except Exception as e:
                             st.error(f"Error al generar PDF: {e}")
         else:
