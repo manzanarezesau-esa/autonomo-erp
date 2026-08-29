@@ -14,3 +14,4 @@ lxml
 pycryptodome
 stripe
 openpyxl
+reportlab
