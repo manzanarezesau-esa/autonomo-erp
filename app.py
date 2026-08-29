@@ -2479,6 +2479,195 @@ elif menu == "📊 Dashboards":
 # ════════════════════════════════════════════════════════════
 # PRESUPUESTOS (Edición funcional + Vista previa profesional + PDF correcto)
 # ════════════════════════════════════════════════════════════
+import io
+import json
+import time
+from datetime import date, datetime
+import pandas as pd
+import streamlit as st
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether
+)
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import cm
+
+# ============================================================
+# FUNCIÓN GENERADORA DE PDF DE PRESUPUESTO
+# ============================================================
+def make_budget_pdf(empresa, cliente, lineas, base_total, vat_total, total, vat_pct=21.0, budget_number="P-0000"):
+    buffer = io.BytesIO()
+    
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=1.5 * cm,
+        rightMargin=1.5 * cm,
+        topMargin=1.5 * cm,
+        bottomMargin=1.5 * cm
+    )
+    
+    styles = getSampleStyleSheet()
+    
+    title_style = ParagraphStyle(
+        'DocTitle',
+        parent=styles['Heading1'],
+        fontSize=14,
+        leading=16,
+        textColor=colors.HexColor("#1A365D"),
+        spaceAfter=4
+    )
+    
+    body_style = ParagraphStyle(
+        'DocBody',
+        parent=styles['Normal'],
+        fontSize=8.5,
+        leading=11,
+        textColor=colors.HexColor("#2D3748")
+    )
+    
+    bold_style = ParagraphStyle(
+        'DocBold',
+        parent=body_style,
+        fontName='Helvetica-Bold'
+    )
+    
+    desc_style = ParagraphStyle(
+        'DescStyle',
+        parent=body_style,
+        fontSize=8,
+        leading=10,
+        textColor=colors.HexColor("#2D3748")
+    )
+    
+    table_header_style = ParagraphStyle(
+        'TableHeader',
+        parent=body_style,
+        fontName='Helvetica-Bold',
+        textColor=colors.white,
+        fontSize=8.5,
+        leading=10
+    )
+
+    story = []
+
+    # 1. Cabecera (Empresa y Cliente)
+    empresa_info = f"""
+    <b>{empresa.get('company_name', 'Empresa')}</b><br/>
+    NIF/CIF: {empresa.get('company_tax_id', '')}<br/>
+    {empresa.get('company_address', '')}<br/>
+    {f"Tel: {empresa.get('company_phone', '')}<br/>" if empresa.get('company_phone') else ''}
+    {f"Email: {empresa.get('company_email', '')}" if empresa.get('company_email') else ''}
+    """
+    
+    cliente_info = f"""
+    <b>DATOS DEL CLIENTE:</b><br/>
+    <b>{cliente.get('name', 'Cliente')}</b><br/>
+    NIF/CIF: {cliente.get('tax_id', '')}<br/>
+    {cliente.get('address', '')}
+    """
+    
+    header_table = Table(
+        [[Paragraph(empresa_info.strip(), body_style), Paragraph(cliente_info.strip(), body_style)]],
+        colWidths=[255, 255]
+    )
+    header_table.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ('TOPPADDING', (0, 0), (-1, -1), 0),
+    ]))
+    
+    story.append(header_table)
+    story.append(Spacer(1, 10))
+
+    # 2. Datos del Presupuesto
+    fecha_str = date.today().strftime("%d/%m/%Y")
+    story.append(Paragraph(f"<b>PRESUPUESTO {budget_number}</b>", title_style))
+    story.append(Paragraph(f"<b>Fecha de emisión:</b> {fecha_str}", body_style))
+    story.append(Spacer(1, 10))
+
+    # 3. Tabla de Líneas
+    table_data = [
+        [
+            Paragraph("Descripción / Concepto", table_header_style),
+            Paragraph("Cant.", table_header_style),
+            Paragraph("Precio Ud.", table_header_style),
+            Paragraph("Total", table_header_style)
+        ]
+    ]
+
+    for item in lineas:
+        desc_formatted = str(item.get("description", "")).replace("\n", "<br/>")
+        cant_val = float(item.get("quantity", 1))
+        precio_val = float(item.get("unit_price", 0))
+        total_val = float(item.get("total", cant_val * precio_val))
+
+        table_data.append([
+            Paragraph(desc_formatted, desc_style),
+            Paragraph(f"{cant_val:,.2f}".replace(",", "@").replace(".", ",").replace("@", "."), body_style),
+            Paragraph(f"{precio_val:,.2f} €".replace(",", "@").replace(".", ",").replace("@", "."), body_style),
+            Paragraph(f"{total_val:,.2f} €".replace(",", "@").replace(".", ",").replace("@", "."), body_style)
+        ])
+
+    items_table = Table(table_data, colWidths=[310, 45, 75, 80])
+    items_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#1A365D")),
+        ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E0")),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('LEFTPADDING', (0, 0), (-1, -1), 5),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+    ]))
+    
+    story.append(items_table)
+    story.append(Spacer(1, 10))
+
+    # 4. Resumen de Totales
+    def fmt_money(val):
+        return f"{float(val):,.2f} €".replace(",", "@").replace(".", ",").replace("@", ".")
+
+    totales_data = [
+        [Paragraph("Base Imponible:", body_style), Paragraph(fmt_money(base_total), body_style)],
+        [Paragraph(f"IVA ({vat_pct:.2f}%):", body_style), Paragraph(fmt_money(vat_total), body_style)]
+    ]
+    
+    irpf_val = sum(float(l.get("irpf_amount", 0)) for l in lineas) if lineas else 0.0
+    if irpf_val > 0:
+        totales_data.append([Paragraph("Retención IRPF:", body_style), Paragraph(f"-{fmt_money(irpf_val)}", body_style)])
+
+    totales_data.append([Paragraph("<b>TOTAL:</b>", bold_style), Paragraph(f"<b>{fmt_money(total)}</b>", bold_style)])
+
+    totales_table = Table(totales_data, colWidths=[120, 80])
+    totales_table.setStyle(TableStyle([
+        ('ALIGN', (0, 0), (-1, -1), 'RIGHT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 2),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ('LINEABOVE', (0, -1), (-1, -1), 1, colors.HexColor("#1A365D")),
+    ]))
+
+    wrapper_table = Table([["", totales_table]], colWidths=[310, 200])
+    wrapper_table.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+    ]))
+
+    story.append(KeepTogether([wrapper_table]))
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+# ============================================================
+# MÓDULO PRESUPUESTOS (STREAMLIT)
+# ============================================================
 elif menu == "📝 Presupuestos":
     st.title("📝 Presupuestos")
     
@@ -2493,9 +2682,6 @@ elif menu == "📝 Presupuestos":
     except Exception:
         empresa = {"user_id": user_id, "company_name": AUTONOMO_NAME, "company_tax_id": AUTONOMO_TAX_ID, "company_address": AUTONOMO_ADDRESS, "company_iban": AUTONOMO_IBAN, "company_phone": "", "company_email": "", "company_logo": ""}
 
-    # ============================================================
-    # GESTIÓN DE ESTADO PARA EDICIÓN
-    # ============================================================
     if "editing_budget_id" not in st.session_state:
         st.session_state.editing_budget_id = None
     if "edit_budget_data" not in st.session_state:
@@ -2504,7 +2690,6 @@ elif menu == "📝 Presupuestos":
         st.session_state.budget_number_editing = None
 
     def limpiar_estado_edicion():
-        """Limpia el estado de edición para volver a modo crear."""
         st.session_state.editing_budget_id = None
         st.session_state.edit_budget_data = None
         st.session_state.budget_number_editing = None
@@ -2519,9 +2704,6 @@ elif menu == "📝 Presupuestos":
                 if col not in productos_df.columns:
                     productos_df[col] = "" if col == "description" else 0.0
 
-        # ============================================================
-        # INDICADOR DE MODO EDICIÓN
-        # ============================================================
         if st.session_state.editing_budget_id and st.session_state.edit_budget_data:
             st.warning(f"✏️ **Editando presupuesto {st.session_state.budget_number_editing}** - Modifica los campos y guarda los cambios.")
             if st.button("❌ Cancelar edición", key="cancel_edit_btn"):
@@ -2530,9 +2712,6 @@ elif menu == "📝 Presupuestos":
         else:
             st.info("➕ Creando nuevo presupuesto")
 
-        # ============================================================
-        # CARGAR DATOS PARA EDICIÓN O VALORES POR DEFECTO
-        # ============================================================
         if st.session_state.editing_budget_id and st.session_state.edit_budget_data:
             budget_data = st.session_state.edit_budget_data
             cliente_pre = {
@@ -2544,9 +2723,8 @@ elif menu == "📝 Presupuestos":
             fecha_pre = budget_data.get("date", str(date.today()))
             try:
                 fecha_pre_dt = datetime.strptime(fecha_pre, "%Y-%m-%d").date()
-            except Exception:
+            except:
                 fecha_pre_dt = date.today()
-            
             vat_pct_pre = float(budget_data.get("vat_pct", 21.0))
             irpf_pct_pre = float(budget_data.get("irpf_pct", 0.0))
         else:
@@ -2570,15 +2748,9 @@ elif menu == "📝 Presupuestos":
             if clientes_df.empty:
                 cliente = {"name": "", "tax_id": "", "address": ""}
             else:
-                client_names = clientes_df["name"].tolist()
-                idx_client = 0
-                if cliente_pre["name"] in client_names:
-                    idx_client = client_names.index(cliente_pre["name"])
-
                 cliente_sel = st.selectbox(
                     "Cliente",
-                    client_names,
-                    index=idx_client,
+                    clientes_df["name"].tolist(),
                     key="cliente_select_presupuesto"
                 )
                 cliente_row = clientes_df[clientes_df["name"] == cliente_sel].iloc[0]
@@ -2661,8 +2833,8 @@ elif menu == "📝 Presupuestos":
                 if prod_sel != "-- Manual --" and not productos_df.empty:
                     prod_row = productos_df[productos_df["name"] == prod_sel]
                     if not prod_row.empty:
-                        precio_default = float(prod_row.iloc[0]["price"])
-                        vat_default = float(prod_row.iloc[0]["default_vat_percentage"])
+                        precio_default = prod_row.iloc[0]["price"]
+                        vat_default = prod_row.iloc[0]["default_vat_percentage"]
                         irpf_default = 0.0
                     else:
                         precio_default = float(lin_pre["unit_price"]) if lin_pre else 0.0
@@ -2714,9 +2886,6 @@ elif menu == "📝 Presupuestos":
         else:
             base_total = vat_total = irpf_total = total = 0.0
 
-        # ============================================================
-        # VISTA PREVIA PROFESIONAL
-        # ============================================================
         st.markdown("---")
         st.subheader("🔍 Vista previa del presupuesto")
         
@@ -2749,10 +2918,20 @@ elif menu == "📝 Presupuestos":
                 vista_df["IVA €"] = vista_df["IVA €"].apply(lambda x: f"{x:,.2f} €")
                 vista_df["Total"] = vista_df["Total"].apply(lambda x: f"{x:,.2f} €")
                 
+                column_config_preview = {
+                    "Descripción": st.column_config.TextColumn("Descripción", width="large"),
+                    "Cant.": st.column_config.NumberColumn("Cant.", width="small"),
+                    "Precio ud.": st.column_config.TextColumn("Precio ud.", width="small"),
+                    "IVA %": st.column_config.NumberColumn("IVA %", width="small"),
+                    "IVA €": st.column_config.TextColumn("IVA €", width="small"),
+                    "Total": st.column_config.TextColumn("Total", width="small"),
+                }
+                
                 st.dataframe(
                     vista_df,
                     hide_index=True,
-                    use_container_width=True
+                    use_container_width=True,
+                    column_config=column_config_preview
                 )
             
             st.markdown("---")
@@ -2770,9 +2949,6 @@ elif menu == "📝 Presupuestos":
 
         st.markdown("---")
         
-        # ============================================================
-        # BOTONES DE ACCIÓN
-        # ============================================================
         col_acc1, col_acc2 = st.columns(2)
         
         with col_acc1:
@@ -2885,9 +3061,6 @@ elif menu == "📝 Presupuestos":
                                     else:
                                         st.error("No se pudo enviar el email")
 
-    # ============================================================
-    # TAB HISTORIAL - CON EDICIÓN FUNCIONAL
-    # ============================================================
     with tab_historial:
         st.subheader("Presupuestos guardados")
         budgets_df = get_budgets(user_id)
@@ -2929,16 +3102,67 @@ elif menu == "📝 Presupuestos":
                         budget_data = budget_row.to_dict()
                     
                     st.markdown("---")
-                    st.subheader(f"Acciones para presupuesto {budget_number_sel}")
-                    st.write(f"**Cliente:** {budget_data.get('client_name', '')}")
-                    st.write(f"**Total:** {money(budget_data.get('total', 0))}")
                     
-                    try:
-                        lineas_db = json.loads(budget_data.get("lines", "[]"))
-                        if lineas_db:
-                            st.table(pd.DataFrame(lineas_db)[["description", "quantity", "unit_price", "total"]])
-                    except Exception:
-                        lineas_db = []
+                    with st.container(border=True):
+                        col_info1, col_info2 = st.columns(2)
+                        
+                        with col_info1:
+                            st.markdown(f"### 📄 Presupuesto {budget_number_sel}")
+                            st.markdown(f"**Fecha:** {pd.to_datetime(budget_data.get('date', '')).strftime('%d/%m/%Y') if budget_data.get('date') else 'N/A'}")
+                            st.markdown(f"**Estado:** {budget_data.get('status', 'pendiente')}")
+                        
+                        with col_info2:
+                            st.markdown(f"**Cliente:** {budget_data.get('client_name', 'N/A')}")
+                            st.markdown(f"**NIF/CIF:** {budget_data.get('client_tax_id', 'N/A')}")
+                            st.markdown(f"**Dirección:** {budget_data.get('client_address', 'N/A')}")
+                        
+                        st.markdown("---")
+                        
+                        try:
+                            lineas_db = json.loads(budget_data.get("lines", "[]"))
+                            if lineas_db:
+                                lineas_hist_df = pd.DataFrame(lineas_db)
+                                
+                                columnas_necesarias = ["description", "quantity", "unit_price", "total"]
+                                for col in columnas_necesarias:
+                                    if col not in lineas_hist_df.columns:
+                                        lineas_hist_df[col] = 0 if col != "description" else ""
+                                
+                                hist_display = lineas_hist_df[columnas_necesarias].copy()
+                                hist_display.columns = ["Descripción", "Cant.", "Precio ud.", "Total"]
+                                hist_display["Precio ud."] = hist_display["Precio ud."].apply(lambda x: f"{float(x):,.2f} €")
+                                hist_display["Total"] = hist_display["Total"].apply(lambda x: f"{float(x):,.2f} €")
+                                
+                                column_config_hist = {
+                                    "Descripción": st.column_config.TextColumn("Descripción", width="large"),
+                                    "Cant.": st.column_config.NumberColumn("Cant.", width="small"),
+                                    "Precio ud.": st.column_config.TextColumn("Precio ud.", width="small"),
+                                    "Total": st.column_config.TextColumn("Total", width="small"),
+                                }
+                                
+                                st.dataframe(
+                                    hist_display,
+                                    hide_index=True,
+                                    use_container_width=True,
+                                    column_config=column_config_hist
+                                )
+                            
+                            st.markdown("---")
+                            col_tot_hist1, col_tot_hist2 = st.columns([2, 1])
+                            
+                            with col_tot_hist2:
+                                st.markdown("### Resumen")
+                                st.markdown(f"**Base imponible:** {money(budget_data.get('base_total', 0))}")
+                                st.markdown(f"**IVA ({budget_data.get('vat_pct', 21):.2f}%):** {money(budget_data.get('vat_total', 0))}")
+                                irpf_hist = budget_data.get('irpf_total', 0)
+                                if irpf_hist and irpf_hist > 0:
+                                    st.markdown(f"**IRPF:** -{money(irpf_hist)}")
+                                st.markdown("---")
+                                st.markdown(f"## **TOTAL: {money(budget_data.get('total', 0))}**")
+                        except Exception as e:
+                            st.warning(f"No se pudieron cargar las líneas del presupuesto: {e}")
+                    
+                    st.markdown("---")
                     
                     col1, col2, col3 = st.columns(3)
                     
@@ -2970,7 +3194,7 @@ elif menu == "📝 Presupuestos":
                             }
                             lineas_pdf = json.loads(budget_data.get("lines", "[]"))
                             
-                            if st.button("📄 PDF", key=f"pdf_btn_{budget_id}"):
+                            if st.button("📄 Descargar PDF", key=f"pdf_btn_{budget_id}"):
                                 pdf_bytes = make_budget_pdf(
                                     empresa,
                                     cliente_pdf,
@@ -2993,7 +3217,6 @@ elif menu == "📝 Presupuestos":
                             st.error(f"Error al generar PDF: {e}")
         else:
             st.info("No hay presupuestos guardados aún.")
-
 # ════════════════════════════════════════════════════════════
 # COLABORADORES
 # ════════════════════════════════════════════════════════════
