@@ -2,6 +2,8 @@
 import io
 import base64
 import re
+import ssl
+import urllib.request
 import qrcode
 from qrcode.image.pil import PilImage
 from jinja2 import Template
@@ -11,7 +13,7 @@ from database import init_supabase
 from verifactu_utils import generar_qr_verifactu
 
 # -----------------------------------------------------------
-# PLANTILLA DE FACTURA (con leyenda Veri*Factu) - NO CAMBIA
+# PLANTILLA DE FACTURA (con leyenda Veri*Factu)
 # -----------------------------------------------------------
 DEFAULT_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="es">
@@ -271,211 +273,53 @@ Sistema de facturación verificable / VERI*FACTU - Factura verificable en la sed
 </html>"""
 
 # -----------------------------------------------------------
-# PLANTILLA DE PRESUPUESTO (OPTIMIZADA - HTML / WeasyPrint)
-# -----------------------------------------------------------
-BUDGET_TEMPLATE = r"""<!DOCTYPE html>
-<html lang="es">
-<head>
-<meta charset="utf-8">
-<style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body {
-    font-family: 'Helvetica', 'Arial', sans-serif;
-    color: #2d3748;
-    margin: 1cm;
-    font-size: 10px;
-}
-.header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    border-bottom: 2px solid #1e3a8a;
-    padding-bottom: 8px;
-    margin-bottom: 12px;
-}
-.logo-container {
-    flex: 0 0 auto;
-    margin-right: 15px;
-}
-.logo-container img {
-    max-width: 200px;
-    max-height: 90px;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-}
-.company-info {
-    text-align: left;
-    flex: 1;
-}
-.company-info h1 {
-    color: #1e3a8a;
-    font-size: 16px;
-    font-weight: 700;
-    margin-bottom: 2px;
-}
-.company-info p {
-    font-size: 8px;
-    line-height: 1.2;
-    color: #4a5568;
-    margin-bottom: 1px;
-}
-.document-title {
-    color: #1e3a8a;
-    font-size: 18px;
-    font-weight: 700;
-    margin: 8px 0 4px 0;
-    text-align: center;
-}
-.client-section {
-    margin: 8px 0;
-    padding: 8px 10px;
-    background-color: #f7fafc;
-    border-left: 3px solid #1e3a8a;
-    border-radius: 3px;
-    font-size: 9px;
-}
-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin: 8px 0;
-    font-size: 9px;
-}
-th {
-    background-color: #1e3a8a;
-    color: white;
-    padding: 6px;
-    font-weight: 600;
-    text-align: left;
-}
-td {
-    padding: 6px;
-    border-bottom: 1px solid #e2e8f0;
-    vertical-align: top;
-    font-size: 8px;
-    line-height: 1.35;
-}
-td ul {
-    margin: 0;
-    padding-left: 14px;
-}
-td li {
-    margin-bottom: 2px;
-    line-height: 1.3;
-}
-.amount {
-    white-space: nowrap;
-    text-align: right;
-}
-.center {
-    white-space: nowrap;
-    text-align: center;
-}
-th.center {
-    text-align: center;
-}
-th.amount {
-    text-align: right;
-}
-.totals {
-    width: 35%;
-    margin-left: auto;
-    margin-top: 8px;
-    background-color: #f7fafc;
-    padding: 8px 10px;
-    border-radius: 4px;
-    font-size: 9px;
-}
-.totals p {
-    margin-bottom: 3px;
-    display: flex;
-    justify-content: space-between;
-}
-.totals .total-final {
-    font-size: 11px;
-    font-weight: 700;
-    color: #1e3a8a;
-    border-top: 1px solid #cbd5e0;
-    padding-top: 3px;
-    margin-top: 3px;
-}
-.footer {
-    margin-top: 15px;
-    font-size: 7px;
-    border-top: 1px solid #e2e8f0;
-    padding-top: 5px;
-    text-align: center;
-    color: #718096;
-}
-</style>
-</head>
-<body>
-<div class="header">
-{% if company.company_logo %}
-<div class="logo-container">
-<img src="{{ company.company_logo }}" alt="Logo">
-</div>
-{% endif %}
-<div class="company-info">
-<h1>{{ company.company_name }}</h1>
-<p>{{ company.company_address }}</p>
-<p>NIF: {{ company.company_tax_id }}</p>
-<p>Tel: {{ company.company_phone }} | Email: {{ company.company_email }}</p>
-</div>
-</div>
-
-<div class="document-title">PRESUPUESTO {{ budget_number }}</div>
-
-<div class="client-section">
-<strong>DATOS DEL CLIENTE</strong><br>
-{{ client.name }}<br>
-NIF: {{ client.tax_id }}<br>
-{{ client.address }}
-</div>
-
-<table>
-<thead>
-<tr>
-<th style="width:70%">Descripción</th>
-<th class="center" style="width:8%">Cant.</th>
-<th class="amount" style="width:11%">Precio ud.</th>
-<th class="amount" style="width:11%">Total</th>
-</tr>
-</thead>
-<tbody>
-{% for item in lineas %}
-<tr>
-<td>{{ item.description_html | safe if item.description_html else item.description }}</td>
-<td class="center">{{ item.quantity }}</td>
-<td class="amount">{{ "%.2f"|format(item.unit_price) }} €</td>
-<td class="amount"><strong>{{ "%.2f"|format(item.total) }} €</strong></td>
-</tr>
-{% endfor %}
-</tbody>
-</table>
-
-<div class="totals">
-<p><span>Base imponible:</span> <span>{{ "%.2f"|format(base_total) }} €</span></p>
-<p><span>IVA ({{ vat_pct }}%):</span> <span>{{ "%.2f"|format(vat_total) }} €</span></p>
-<p class="total-final"><span>TOTAL:</span> <span>{{ "%.2f"|format(total) }} €</span></p>
-</div>
-
-<div class="footer">
-Presupuesto válido por 30 días · Gracias por confiar en nosotros
-</div>
-</body>
-</html>"""
-
-# -----------------------------------------------------------
-# Utilidades
+# UTILIDADES DE IMAGEN Y TEXTO
 # -----------------------------------------------------------
 def _logo_sanitized(url):
     if not url:
         return ""
     url = str(url).strip()
-    if not (url.startswith("http://") or url.startswith("https://")):
-        return ""
     return url
+
+def _get_reportlab_logo(logo_input, max_w=180, max_h=80):
+    """Carga imágenes para ReportLab desde URL, Base64 o archivo local."""
+    if not logo_input:
+        return None
+    logo_input = str(logo_input).strip()
+    if not logo_input:
+        return None
+
+    try:
+        from PIL import Image as PILImage
+        from reportlab.platypus import Image as RLImage
+
+        img_bytes = None
+
+        if logo_input.startswith("data:image"):
+            base64_data = logo_input.split(",", 1)[1]
+            img_bytes = base64.b64decode(base64_data)
+        elif logo_input.startswith("http://") or logo_input.startswith("https://"):
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            req = urllib.request.Request(logo_input, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=6, context=ctx) as resp:
+                img_bytes = resp.read()
+        elif len(logo_input) > 100 and not logo_input.startswith("/") and not logo_input.startswith("C:"):
+            img_bytes = base64.b64decode(logo_input)
+        else:
+            with open(logo_input, "rb") as f:
+                img_bytes = f.read()
+
+        if img_bytes:
+            pil_img = PILImage.open(io.BytesIO(img_bytes))
+            w, h = pil_img.size
+            if w > 0 and h > 0:
+                ratio = min(max_w / w, max_h / h, 1.0)
+                return RLImage(io.BytesIO(img_bytes), width=w * ratio, height=h * ratio)
+    except Exception:
+        return None
+    return None
 
 def get_qr_base64(invoice, client, company_config):
     """Genera QR Veri*Factu con formato exacto de la AEAT."""
@@ -518,35 +362,8 @@ def _html_to_pdf(html_str):
         st.error(f"Error generando PDF: {e}")
         return None
 
-def _process_description(desc_text):
-    """
-    Convierte texto con viñetas en HTML semántico.
-    - Reemplaza carácteres '■' pegados por saltos de línea
-    - Convierte a listas HTML limpias
-    """
-    if not desc_text:
-        return ""
-    
-    desc_text = str(desc_text).strip()
-    # Reemplazar viñetas incrustadas en linea por saltos de línea
-    desc_text = desc_text.replace('■', '\n• ')
-    lines = desc_text.split('\n')
-    
-    items = []
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        cleaned = re.sub(r'^\s*[•\-\*■]\s*', '', line)
-        if cleaned:
-            items.append(f'<li>{cleaned}</li>')
-            
-    if items:
-        return f'<ul>{"".join(items)}</ul>'
-    return desc_text
-
 # -----------------------------------------------------------
-# Factura (NO CAMBIA - usa WeasyPrint)
+# FACTURA (WEASYPRINT)
 # -----------------------------------------------------------
 def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
     qr_base64 = get_qr_base64(invoice, client, company_config)
@@ -580,26 +397,18 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
     return _html_to_pdf(html_str)
 
 # -----------------------------------------------------------
-# Presupuesto (CORREGIDO - ReportLab con formato limpio)
+# PRESUPUESTO (REPORTLAB CON TAMAÑOS Y LOGO CORREGIDOS)
 # -----------------------------------------------------------
 def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_pct, budget_number=None):
-    """
-    Genera PDF de presupuesto con maquetación compacta y profesional.
-    Usa ReportLab con anchos de columna optimizados y formateo limpio de descripciones.
-    """
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import cm
     from reportlab.lib import colors
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.platypus import (
-        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
     )
-    from reportlab.lib.utils import ImageReader
     from reportlab.lib.enums import TA_LEFT, TA_RIGHT, TA_CENTER
-    
-    # ============================================================
-    # CONFIGURACIÓN DE PÁGINA
-    # ============================================================
+
     PAGE_WIDTH, PAGE_HEIGHT = A4
     MARGIN_LEFT = 1.2 * cm
     MARGIN_RIGHT = 1.2 * cm
@@ -607,55 +416,53 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
     MARGIN_BOTTOM = 1.0 * cm
     
     PRINTABLE_WIDTH = PAGE_WIDTH - MARGIN_LEFT - MARGIN_RIGHT
-    
-    # ============================================================
-    # ESTILOS
-    # ============================================================
+
+    # ESTILOS CON TIPOGRAFÍA MÁS GRANDE Y LEGIBLE
     styles = getSampleStyleSheet()
-    
+
     company_style = ParagraphStyle(
         'CompanyStyle',
         parent=styles['Heading2'],
-        fontSize=13,
-        leading=15,
+        fontSize=15,
+        leading=18,
         textColor=colors.HexColor('#1E3A8A'),
-        spaceAfter=2,
+        spaceAfter=3,
     )
     
     company_info_style = ParagraphStyle(
         'CompanyInfoStyle',
         parent=styles['Normal'],
-        fontSize=8,
-        leading=10,
+        fontSize=10,
+        leading=13,
         textColor=colors.HexColor('#4A5568'),
-        spaceAfter=1,
+        spaceAfter=2,
     )
     
     title_style = ParagraphStyle(
         'TitleStyle',
         parent=styles['Title'],
-        fontSize=15,
-        leading=17,
+        fontSize=18,
+        leading=21,
         textColor=colors.HexColor('#1E3A8A'),
-        spaceAfter=4,
+        spaceAfter=6,
         alignment=TA_CENTER,
     )
     
-    number_style = ParagraphStyle(
-        'NumberStyle',
+    client_info_style = ParagraphStyle(
+        'ClientInfoStyle',
         parent=styles['Normal'],
-        fontSize=9,
-        leading=11,
+        fontSize=10,
+        leading=13,
         textColor=colors.HexColor('#2D3748'),
         spaceAfter=2,
         alignment=TA_CENTER,
     )
-    
+
     desc_style = ParagraphStyle(
         'DescStyle',
         parent=styles['Normal'],
-        fontSize=8,
-        leading=11,
+        fontSize=10,
+        leading=14,
         textColor=colors.HexColor('#2D3748'),
         spaceBefore=0,
         spaceAfter=0,
@@ -665,20 +472,20 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
     desc_header_style = ParagraphStyle(
         'DescHeaderStyle',
         parent=styles['Normal'],
-        fontSize=8,
-        leading=10,
+        fontSize=10,
+        leading=12,
         textColor=colors.white,
         fontName='Helvetica-Bold',
         spaceBefore=0,
         spaceAfter=0,
         alignment=TA_LEFT,
     )
-    
+
     num_style = ParagraphStyle(
         'NumStyle',
         parent=styles['Normal'],
-        fontSize=8,
-        leading=10,
+        fontSize=10,
+        leading=14,
         textColor=colors.HexColor('#2D3748'),
         spaceBefore=0,
         spaceAfter=0,
@@ -688,20 +495,20 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
     num_header_style = ParagraphStyle(
         'NumHeaderStyle',
         parent=styles['Normal'],
-        fontSize=8,
-        leading=10,
+        fontSize=10,
+        leading=12,
         textColor=colors.white,
         fontName='Helvetica-Bold',
         spaceBefore=0,
         spaceAfter=0,
         alignment=TA_RIGHT,
     )
-    
+
     center_style = ParagraphStyle(
         'CenterStyle',
         parent=styles['Normal'],
-        fontSize=8,
-        leading=10,
+        fontSize=10,
+        leading=14,
         textColor=colors.HexColor('#2D3748'),
         spaceBefore=0,
         spaceAfter=0,
@@ -711,42 +518,30 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
     center_header_style = ParagraphStyle(
         'CenterHeaderStyle',
         parent=styles['Normal'],
-        fontSize=8,
-        leading=10,
+        fontSize=10,
+        leading=12,
         textColor=colors.white,
         fontName='Helvetica-Bold',
         spaceBefore=0,
         spaceAfter=0,
         alignment=TA_CENTER,
     )
-    
+
     total_label_style = ParagraphStyle(
         'TotalLabelStyle',
         parent=styles['Normal'],
-        fontSize=9,
-        leading=11,
+        fontSize=10,
+        leading=13,
         textColor=colors.HexColor('#2D3748'),
         spaceBefore=0,
         spaceAfter=0,
         alignment=TA_LEFT,
     )
-    
+
     total_value_style = ParagraphStyle(
         'TotalValueStyle',
         parent=styles['Normal'],
-        fontSize=9,
-        leading=11,
-        textColor=colors.HexColor('#1E3A8A'),
-        spaceBefore=0,
-        spaceAfter=0,
-        alignment=TA_RIGHT,
-        fontName='Helvetica-Bold',
-    )
-    
-    total_final_style = ParagraphStyle(
-        'TotalFinalStyle',
-        parent=styles['Normal'],
-        fontSize=11,
+        fontSize=10,
         leading=13,
         textColor=colors.HexColor('#1E3A8A'),
         spaceBefore=0,
@@ -754,53 +549,59 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
         alignment=TA_RIGHT,
         fontName='Helvetica-Bold',
     )
-    
+
+    total_final_style = ParagraphStyle(
+        'TotalFinalStyle',
+        parent=styles['Normal'],
+        fontSize=13,
+        leading=16,
+        textColor=colors.HexColor('#1E3A8A'),
+        spaceBefore=0,
+        spaceAfter=0,
+        alignment=TA_RIGHT,
+        fontName='Helvetica-Bold',
+    )
+
     footer_style = ParagraphStyle(
         'FooterStyle',
         parent=styles['Normal'],
-        fontSize=7,
-        leading=9,
+        fontSize=9,
+        leading=11,
         textColor=colors.HexColor('#718096'),
         alignment=TA_CENTER,
     )
-    
-    # ============================================================
-    # FUNCIONES AUXILIARES
-    # ============================================================
+
     def fmt_money(valor):
         try:
             return f"{float(valor):,.2f} €"
         except (ValueError, TypeError):
             return "0.00 €"
-    
+
     def process_description(desc_text):
         if not desc_text:
             return ""
         desc_text = str(desc_text).strip()
-        # Reemplazar viñetas o marcas incrustadas como '■' por saltos de línea con viñeta ordenada
-        desc_text = desc_text.replace('■', '\n• ')
         
+        # Reemplazar '■' incrustados por saltos de línea
+        desc_text = desc_text.replace('■', '\n')
         lines = desc_text.split('\n')
+        
         clean_lines = []
-        for i, line in enumerate(lines):
+        for line in lines:
             line = line.strip()
             if not line:
                 continue
-            cleaned = re.sub(r'^\s*[•\-\*■]\s*', '', line)
+            # Limpiar viñetas al inicio de línea
+            cleaned = re.sub(r'^[•\-\*\s]+', '', line).strip()
             if cleaned:
-                # La primera línea es el título/resumen, las siguientes son viñetas
-                if i == 0 and not desc_text.startswith(('•', '-', '*', '■')):
+                if not clean_lines:
                     clean_lines.append(f"<b>{cleaned}</b>")
                 else:
                     clean_lines.append(f"&bull; {cleaned}")
-        
+
         return "<br/>".join(clean_lines)
-    
-    # ============================================================
-    # CONSTRUIR DOCUMENTO
-    # ============================================================
+
     buffer = io.BytesIO()
-    
     doc = SimpleDocTemplate(
         buffer,
         pagesize=A4,
@@ -809,55 +610,39 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
         topMargin=MARGIN_TOP,
         bottomMargin=MARGIN_BOTTOM,
     )
-    
+
     story = []
-    
+
     company_name = company.get('company_name', 'Empresa')
     company_tax_id = company.get('company_tax_id', '')
     company_address = company.get('company_address', '')
-    
+
     client_name = client.get('name', 'Cliente')
-    client_tax_id = client.get('tax_id', '')
     client_address = client.get('address', '')
-    
     budget_num = budget_number or '---'
-    
-    # Logo
-    logo_url = company.get('company_logo', '')
-    logo_element = None
-    
-    if logo_url and (logo_url.startswith('http://') or logo_url.startswith('https://')):
-        try:
-            import requests
-            from io import BytesIO
-            logo_response = requests.get(logo_url, timeout=5)
-            if logo_response.status_code == 200:
-                logo_img = ImageReader(BytesIO(logo_response.content))
-                img_width, img_height = logo_img.getSize()
-                max_width = 150
-                max_height = 70
-                ratio = min(max_width/img_width, max_height/img_height, 1.0)
-                logo_element = Image(logo_img, width=img_width * ratio, height=img_height * ratio)
-        except Exception:
-            logo_element = None
-    
-    # Cabecera
+
+    # CARGA DEL LOGO CON SOPORTE COMPLETO
+    logo_input = company.get('company_logo', '')
+    logo_element = _get_reportlab_logo(logo_input, max_w=180, max_h=80)
+
+    today_str = __import__('datetime').date.today().strftime('%d/%m/%Y')
+
     if logo_element:
         header_data = [
             [logo_element, Paragraph(f"<b>Nº:</b> {budget_num}", company_info_style)],
-            [Paragraph(f"<b>{company_name}</b>", company_style), Paragraph(f"Fecha: {__import__('datetime').date.today().strftime('%d/%m/%Y')}", company_info_style)],
+            [Paragraph(f"<b>{company_name}</b>", company_style), Paragraph(f"<b>Fecha:</b> {today_str}", company_info_style)],
             [Paragraph(f"NIF: {company_tax_id}", company_info_style), Paragraph("", company_info_style)],
             [Paragraph(company_address, company_info_style), Paragraph("", company_info_style)],
         ]
-        header_col_widths = [PRINTABLE_WIDTH * 0.4, PRINTABLE_WIDTH * 0.6]
+        header_col_widths = [PRINTABLE_WIDTH * 0.5, PRINTABLE_WIDTH * 0.5]
     else:
         header_data = [
-            [Paragraph(company_name, company_style), Paragraph(f"<b>Nº:</b> {budget_num}", company_info_style)],
-            [Paragraph(f"NIF: {company_tax_id}", company_info_style), Paragraph(f"Fecha: {__import__('datetime').date.today().strftime('%d/%m/%Y')}", company_info_style)],
+            [Paragraph(f"<b>{company_name}</b>", company_style), Paragraph(f"<b>Nº:</b> {budget_num}", company_info_style)],
+            [Paragraph(f"NIF: {company_tax_id}", company_info_style), Paragraph(f"<b>Fecha:</b> {today_str}", company_info_style)],
             [Paragraph(company_address, company_info_style), Paragraph("", company_info_style)],
         ]
-        header_col_widths = [PRINTABLE_WIDTH * 0.7, PRINTABLE_WIDTH * 0.3]
-    
+        header_col_widths = [PRINTABLE_WIDTH * 0.65, PRINTABLE_WIDTH * 0.35]
+
     header_table = Table(header_data, colWidths=header_col_widths)
     header_table.setStyle(TableStyle([
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
@@ -866,83 +651,82 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
         ('RIGHTPADDING', (0, 0), (-1, -1), 0),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
     ]))
-    
+
     story.append(header_table)
-    story.append(Spacer(1, 8))
-    
+    story.append(Spacer(1, 10))
+
     story.append(Paragraph("PRESUPUESTO", title_style))
-    story.append(Paragraph(f"Cliente: {client_name}", number_style))
+    story.append(Paragraph(f"<b>Cliente:</b> {client_name}", client_info_style))
     if client_address:
         story.append(Paragraph(client_address, company_info_style))
-    story.append(Spacer(1, 6))
-    
-    line_table = Table([['']], colWidths=[PRINTABLE_WIDTH], rowHeights=[1])
+    story.append(Spacer(1, 8))
+
+    line_table = Table([['']], colWidths=[PRINTABLE_WIDTH], rowHeights=[2])
     line_table.setStyle(TableStyle([('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#1E3A8A'))]))
     story.append(line_table)
-    story.append(Spacer(1, 8))
-    
-    # Tabla de líneas - ANCHOS OPTIMIZADOS (70% Descripción, 8% Cant., 11% Precio, 11% Total)
-    col_desc_width = PRINTABLE_WIDTH * 0.70
+    story.append(Spacer(1, 10))
+
+    # COLUMNAS ANCHAS Y TIPOGRAFÍA 10PT
+    col_desc_width = PRINTABLE_WIDTH * 0.68
     col_qty_width = PRINTABLE_WIDTH * 0.08
-    col_price_width = PRINTABLE_WIDTH * 0.11
-    col_total_width = PRINTABLE_WIDTH * 0.11
-    
+    col_price_width = PRINTABLE_WIDTH * 0.12
+    col_total_width = PRINTABLE_WIDTH * 0.12
+
     col_widths = [col_desc_width, col_qty_width, col_price_width, col_total_width]
-    
+
     headers = [
         Paragraph('Descripción', desc_header_style),
         Paragraph('Cant.', center_header_style),
         Paragraph('Precio ud.', num_header_style),
         Paragraph('Total', num_header_style),
     ]
-    
+
     rows = [headers]
-    
+
     for linea in lineas:
         desc = linea.get('description', '')
         qty = linea.get('quantity', 1)
         price = linea.get('unit_price', 0)
         line_total = linea.get('total', linea.get('base_amount', 0))
-        
+
         desc_html = process_description(desc)
-        
+
         rows.append([
             Paragraph(desc_html, desc_style),
             Paragraph(f"{float(qty):.0f}", center_style),
             Paragraph(fmt_money(price), num_style),
             Paragraph(fmt_money(line_total), num_style),
         ])
-    
+
     lines_table = Table(rows, colWidths=col_widths, repeatRows=1)
-    
+
     table_style = [
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1E3A8A')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('TOPPADDING', (0, 0), (-1, -1), 4),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-        ('LEFTPADDING', (0, 0), (-1, -1), 4),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 4),
-        ('LINEBELOW', (0, 0), (-1, 0), 0.5, colors.HexColor('#1E3A8A')),
-        ('LINEBELOW', (0, 1), (-1, -1), 0.3, colors.HexColor('#E2E8F0')),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F7FAFC')]),
+        ('TOPPADDING', (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('LEFTPADDING', (0, 0), (-1, -1), 5),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+        ('LINEBELOW', (0, 0), (-1, 0), 1, colors.HexColor('#1E3A8A')),
+        ('LINEBELOW', (0, 1), (-1, -1), 0.5, colors.HexColor('#E2E8F0')),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
     ]
-    
+
     lines_table.setStyle(TableStyle(table_style))
     story.append(lines_table)
-    story.append(Spacer(1, 8))
-    
-    # Totales
+    story.append(Spacer(1, 10))
+
+    # BLOQUE DE TOTALES
     vat_pct_display = vat_pct or 0
-    
-    totals_width = PRINTABLE_WIDTH * 0.35
+    totals_width = PRINTABLE_WIDTH * 0.40
     totals_left_offset = PRINTABLE_WIDTH - totals_width
-    
+
     totals_data = [
         [Paragraph('Base imponible:', total_label_style), Paragraph(fmt_money(base_total), total_value_style)],
         [Paragraph(f'IVA ({vat_pct_display:.1f}%):', total_label_style), Paragraph(fmt_money(vat_total), total_value_style)],
     ]
-    
+
     irpf_total = sum(l.get('irpf_amount', 0) for l in lineas)
     if irpf_total > 0:
         irpf_pct = lineas[0].get('irpf_percentage', 0) if lineas else 0
@@ -950,25 +734,24 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
             Paragraph(f'IRPF ({irpf_pct:.1f}%):', total_label_style),
             Paragraph(f'-{fmt_money(irpf_total)}', total_value_style)
         ])
-    
-    totals_data.append([Paragraph('', total_label_style), Paragraph('', total_label_style)])
+
     totals_data.append([
         Paragraph('<b>TOTAL:</b>', total_final_style),
         Paragraph(f'<b>{fmt_money(total)}</b>', total_final_style),
     ])
-    
+
     totals_table = Table(totals_data, colWidths=[totals_width * 0.45, totals_width * 0.55])
     totals_table.setStyle(TableStyle([
         ('ALIGN', (0, 0), (0, -1), 'LEFT'),
         ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('TOPPADDING', (0, 0), (-1, -1), 2),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
         ('LEFTPADDING', (0, 0), (-1, -1), 0),
         ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-        ('LINEABOVE', (0, -2), (-1, -2), 0.5, colors.HexColor('#1E3A8A')),
+        ('LINEABOVE', (0, -1), (-1, -1), 1, colors.HexColor('#1E3A8A')),
     ]))
-    
+
     totals_wrapper = Table([['', totals_table]], colWidths=[totals_left_offset, totals_width])
     totals_wrapper.setStyle(TableStyle([
         ('LEFTPADDING', (0, 0), (-1, -1), 0),
@@ -976,17 +759,17 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
         ('TOPPADDING', (0, 0), (-1, -1), 0),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
     ]))
-    
+
     story.append(totals_wrapper)
-    story.append(Spacer(1, 10))
-    
+    story.append(Spacer(1, 15))
+
     story.append(Paragraph(
         "Presupuesto válido por 30 días · Gracias por confiar en nosotros",
         footer_style
     ))
-    
+
     doc.build(story)
     pdf_bytes = buffer.getvalue()
     buffer.close()
-    
+
     return pdf_bytes
