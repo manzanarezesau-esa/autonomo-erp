@@ -366,7 +366,6 @@ td li {
 .amount {
     white-space: nowrap;
     text-align: right;
-
 }
 .center {
     white-space: nowrap;
@@ -522,32 +521,29 @@ def _html_to_pdf(html_str):
 def _process_description(desc_text):
     """
     Convierte texto con viñetas en HTML semántico.
-    - Elimina símbolos duplicados (•, ■, -, *)
+    - Reemplaza carácteres '■' pegados por saltos de línea
     - Convierte a listas HTML limpias
     """
     if not desc_text:
         return ""
     
     desc_text = str(desc_text).strip()
+    # Reemplazar viñetas incrustadas en linea por saltos de línea
+    desc_text = desc_text.replace('■', '\n• ')
     lines = desc_text.split('\n')
     
-    has_bullets = any(
-        re.match(r'^\s*[•\-\*■]\s', line) for line in lines if line.strip()
-    )
-    
-    if has_bullets:
-        items = []
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            cleaned = re.sub(r'^\s*[•\-\*■]\s*', '', line)
-            if cleaned:
-                items.append(f'<li>{cleaned}</li>')
+    items = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        cleaned = re.sub(r'^\s*[•\-\*■]\s*', '', line)
+        if cleaned:
+            items.append(f'<li>{cleaned}</li>')
+            
+    if items:
         return f'<ul>{"".join(items)}</ul>'
-    else:
-        clean_lines = [line.strip() for line in lines if line.strip()]
-        return '<br/>'.join(clean_lines)
+    return desc_text
 
 # -----------------------------------------------------------
 # Factura (NO CAMBIA - usa WeasyPrint)
@@ -584,12 +580,12 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
     return _html_to_pdf(html_str)
 
 # -----------------------------------------------------------
-# Presupuesto (CORREGIDO - ReportLab con anchos 70%)
+# Presupuesto (CORREGIDO - ReportLab con formato limpio)
 # -----------------------------------------------------------
 def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_pct, budget_number=None):
     """
     Genera PDF de presupuesto con maquetación compacta y profesional.
-    Usa ReportLab con anchos de columna optimizados.
+    Usa ReportLab con anchos de columna optimizados y formateo limpio de descripciones.
     """
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import cm
@@ -620,8 +616,8 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
     company_style = ParagraphStyle(
         'CompanyStyle',
         parent=styles['Heading2'],
-        fontSize=14,
-        leading=16,
+        fontSize=13,
+        leading=15,
         textColor=colors.HexColor('#1E3A8A'),
         spaceAfter=2,
     )
@@ -638,8 +634,8 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
     title_style = ParagraphStyle(
         'TitleStyle',
         parent=styles['Title'],
-        fontSize=16,
-        leading=18,
+        fontSize=15,
+        leading=17,
         textColor=colors.HexColor('#1E3A8A'),
         spaceAfter=4,
         alignment=TA_CENTER,
@@ -648,8 +644,8 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
     number_style = ParagraphStyle(
         'NumberStyle',
         parent=styles['Normal'],
-        fontSize=10,
-        leading=12,
+        fontSize=9,
+        leading=11,
         textColor=colors.HexColor('#2D3748'),
         spaceAfter=2,
         alignment=TA_CENTER,
@@ -659,7 +655,7 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
         'DescStyle',
         parent=styles['Normal'],
         fontSize=8,
-        leading=10,
+        leading=11,
         textColor=colors.HexColor('#2D3748'),
         spaceBefore=0,
         spaceAfter=0,
@@ -750,8 +746,8 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
     total_final_style = ParagraphStyle(
         'TotalFinalStyle',
         parent=styles['Normal'],
-        fontSize=12,
-        leading=14,
+        fontSize=11,
+        leading=13,
         textColor=colors.HexColor('#1E3A8A'),
         spaceBefore=0,
         spaceAfter=0,
@@ -781,21 +777,24 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
         if not desc_text:
             return ""
         desc_text = str(desc_text).strip()
+        # Reemplazar viñetas o marcas incrustadas como '■' por saltos de línea con viñeta ordenada
+        desc_text = desc_text.replace('■', '\n• ')
+        
         lines = desc_text.split('\n')
-        has_bullets = any(re.match(r'^\s*[•\-\*■]\s', line) for line in lines if line.strip())
-        if has_bullets:
-            items = []
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-                cleaned = re.sub(r'^\s*[•\-\*■]\s*', '', line)
-                if cleaned:
-                    items.append(f'<li>{cleaned}</li>')
-            return f'<ul leftindent="10">{"".join(items)}</ul>'
-        else:
-            clean_lines = [line.strip() for line in lines if line.strip()]
-            return '<br/>'.join(clean_lines)
+        clean_lines = []
+        for i, line in enumerate(lines):
+            line = line.strip()
+            if not line:
+                continue
+            cleaned = re.sub(r'^\s*[•\-\*■]\s*', '', line)
+            if cleaned:
+                # La primera línea es el título/resumen, las siguientes son viñetas
+                if i == 0 and not desc_text.startswith(('•', '-', '*', '■')):
+                    clean_lines.append(f"<b>{cleaned}</b>")
+                else:
+                    clean_lines.append(f"&bull; {cleaned}")
+        
+        return "<br/>".join(clean_lines)
     
     # ============================================================
     # CONSTRUIR DOCUMENTO
