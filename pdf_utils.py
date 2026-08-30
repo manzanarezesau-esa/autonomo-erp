@@ -278,8 +278,7 @@ Sistema de facturación verificable / VERI*FACTU - Factura verificable en la sed
 def _logo_sanitized(url):
     if not url:
         return ""
-    url = str(url).strip()
-    return url
+    return str(url).strip()
 
 def _get_reportlab_logo(logo_input, max_w=180, max_h=80):
     """Carga imágenes para ReportLab desde URL, Base64 o archivo local."""
@@ -397,8 +396,47 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
     return _html_to_pdf(html_str)
 
 # -----------------------------------------------------------
-# PRESUPUESTO (REPORTLAB CON TAMAÑOS Y LOGO CORREGIDOS)
+# PRESUPUESTO (REPORTLAB MULTIPÁGINA AUTOMÁTICO)
 # -----------------------------------------------------------
+def split_description_into_paragraphs(desc_text):
+    """
+    Divide un texto largo en párrafos independientes para permitir
+    salto de página automático en ReportLab.
+    """
+    if not desc_text:
+        return [""]
+    
+    desc_text = str(desc_text).strip().replace('■', '\n')
+    raw_lines = desc_text.split('\n')
+    
+    paragraphs = []
+    for line in raw_lines:
+        line = line.strip()
+        if not line:
+            continue
+        cleaned = re.sub(r'^[•\-\*\s]+', '', line).strip()
+        if not cleaned:
+            continue
+            
+        # Si un solo párrafo excede 300 caracteres sin saltos, lo divide por bloques de palabras
+        if len(cleaned) > 300:
+            words = cleaned.split(' ')
+            chunk = []
+            chunk_len = 0
+            for w in words:
+                chunk.append(w)
+                chunk_len += len(w) + 1
+                if chunk_len >= 300:
+                    paragraphs.append(" ".join(chunk))
+                    chunk = []
+                    chunk_len = 0
+            if chunk:
+                paragraphs.append(" ".join(chunk))
+        else:
+            paragraphs.append(cleaned)
+            
+    return paragraphs if paragraphs else [str(desc_text)]
+
 def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_pct, budget_number=None):
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import cm
@@ -417,7 +455,6 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
     
     PRINTABLE_WIDTH = PAGE_WIDTH - MARGIN_LEFT - MARGIN_RIGHT
 
-    # ESTILOS CON TIPOGRAFÍA MÁS GRANDE Y LEGIBLE
     styles = getSampleStyleSheet()
 
     company_style = ParagraphStyle(
@@ -577,30 +614,6 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
         except (ValueError, TypeError):
             return "0.00 €"
 
-    def process_description(desc_text):
-        if not desc_text:
-            return ""
-        desc_text = str(desc_text).strip()
-        
-        # Reemplazar '■' incrustados por saltos de línea
-        desc_text = desc_text.replace('■', '\n')
-        lines = desc_text.split('\n')
-        
-        clean_lines = []
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            # Limpiar viñetas al inicio de línea
-            cleaned = re.sub(r'^[•\-\*\s]+', '', line).strip()
-            if cleaned:
-                if not clean_lines:
-                    clean_lines.append(f"<b>{cleaned}</b>")
-                else:
-                    clean_lines.append(f"&bull; {cleaned}")
-
-        return "<br/>".join(clean_lines)
-
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer,
@@ -621,7 +634,6 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
     client_address = client.get('address', '')
     budget_num = budget_number or '---'
 
-    # CARGA DEL LOGO CON SOPORTE COMPLETO
     logo_input = company.get('company_logo', '')
     logo_element = _get_reportlab_logo(logo_input, max_w=180, max_h=80)
 
@@ -666,7 +678,6 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
     story.append(line_table)
     story.append(Spacer(1, 10))
 
-    # COLUMNAS ANCHAS Y TIPOGRAFÍA 10PT
     col_desc_width = PRINTABLE_WIDTH * 0.68
     col_qty_width = PRINTABLE_WIDTH * 0.08
     col_price_width = PRINTABLE_WIDTH * 0.12
@@ -682,6 +693,7 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
     ]
 
     rows = [headers]
+    item_end_indices = []
 
     for linea in lineas:
         desc = linea.get('description', '')
@@ -689,14 +701,27 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
         price = linea.get('unit_price', 0)
         line_total = linea.get('total', linea.get('base_amount', 0))
 
-        desc_html = process_description(desc)
+        paragraphs = split_description_into_paragraphs(desc)
+        if not paragraphs:
+            paragraphs = [""]
 
+        first_p = paragraphs[0]
         rows.append([
-            Paragraph(desc_html, desc_style),
+            Paragraph(f"<b>{first_p}</b>", desc_style),
             Paragraph(f"{float(qty):.0f}", center_style),
             Paragraph(fmt_money(price), num_style),
             Paragraph(fmt_money(line_total), num_style),
         ])
+
+        for sub_p in paragraphs[1:]:
+            rows.append([
+                Paragraph(f"&bull; {sub_p}", desc_style),
+                Paragraph("", center_style),
+                Paragraph("", num_style),
+                Paragraph("", num_style),
+            ])
+
+        item_end_indices.append(len(rows) - 1)
 
     lines_table = Table(rows, colWidths=col_widths, repeatRows=1)
 
@@ -704,20 +729,20 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1E3A8A')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('TOPPADDING', (0, 0), (-1, -1), 6),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
         ('LEFTPADDING', (0, 0), (-1, -1), 5),
         ('RIGHTPADDING', (0, 0), (-1, -1), 5),
         ('LINEBELOW', (0, 0), (-1, 0), 1, colors.HexColor('#1E3A8A')),
-        ('LINEBELOW', (0, 1), (-1, -1), 0.5, colors.HexColor('#E2E8F0')),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
     ]
+
+    for idx in item_end_indices:
+        table_style.append(('LINEBELOW', (0, idx), (-1, idx), 0.5, colors.HexColor('#CBD5E0')))
 
     lines_table.setStyle(TableStyle(table_style))
     story.append(lines_table)
     story.append(Spacer(1, 10))
 
-    # BLOQUE DE TOTALES
     vat_pct_display = vat_pct or 0
     totals_width = PRINTABLE_WIDTH * 0.40
     totals_left_offset = PRINTABLE_WIDTH - totals_width
