@@ -2477,7 +2477,7 @@ elif menu == "📊 Dashboards":
 
  
 # ════════════════════════════════════════════════════════════
-# PRESUPUESTOS (CORREGIDO - Edición + Vista Previa + PDF + Estado + Email)
+# PRESUPUESTOS (CORREGIDO - Cancelar edición sin error React)
 # ════════════════════════════════════════════════════════════
 elif menu == "📝 Presupuestos":
     st.title("📝 Presupuestos")
@@ -2504,15 +2504,29 @@ elif menu == "📝 Presupuestos":
         st.session_state.budget_number_editing = None
 
     def limpiar_estado_edicion():
+        """Limpia el estado de edición y las claves de widgets relacionadas."""
         st.session_state.editing_budget_id = None
         st.session_state.edit_budget_data = None
         st.session_state.budget_number_editing = None
+        
+        # Limpiar claves de widgets del formulario de presupuesto
+        keys_to_clear = [
+            k for k in st.session_state.keys()
+            if k.startswith("bud_")
+            or k.startswith("manual_name_budget")
+            or k.startswith("manual_taxid_budget")
+            or k.startswith("manual_address_budget")
+            or k.startswith("fecha_presupuesto")
+            or k.startswith("num_lineas_budget")
+            or k.startswith("cliente_select_presupuesto")
+            or k.startswith("modo_cliente_presupuesto")
+        ]
+        for key in keys_to_clear:
+            if key in st.session_state:
+                del st.session_state[key]
 
     tab_nuevo, tab_historial = st.tabs(["Nuevo / Editar presupuesto", "Historial de presupuestos"])
 
-    # ============================================================
-    # TAB NUEVO / EDITAR PRESUPUESTO
-    # ============================================================
     with tab_nuevo:
         clientes_df = get_clients(user_id)
         productos_df = get_products(user_id)
@@ -2521,16 +2535,23 @@ elif menu == "📝 Presupuestos":
                 if col not in productos_df.columns:
                     productos_df[col] = "" if col == "description" else 0.0
 
-        # Indicador de modo edición
+        # ============================================================
+        # INDICADOR DE MODO EDICIÓN
+        # ============================================================
         if st.session_state.editing_budget_id and st.session_state.edit_budget_data:
             st.warning(f"✏️ **Editando presupuesto {st.session_state.budget_number_editing}** - Modifica los campos y guarda los cambios.")
-            if st.button("❌ Cancelar edición", key="cancel_edit_btn"):
-                limpiar_estado_edicion()
-                st.rerun()
+            
+            col_cancel_btn, _ = st.columns([1, 3])
+            with col_cancel_btn:
+                if st.button("❌ Cancelar edición", key="cancel_edit_btn_v2", use_container_width=True):
+                    limpiar_estado_edicion()
+                    st.rerun()
         else:
             st.info("➕ Creando nuevo presupuesto")
 
-        # Cargar datos para edición o valores por defecto
+        # ============================================================
+        # CARGAR DATOS PARA EDICIÓN O VALORES POR DEFECTO
+        # ============================================================
         if st.session_state.editing_budget_id and st.session_state.edit_budget_data:
             budget_data = st.session_state.edit_budget_data
             cliente_pre = {
@@ -2556,28 +2577,47 @@ elif menu == "📝 Presupuestos":
         st.markdown("---")
         st.subheader("Datos del cliente")
         
-        modo_cliente = st.radio("Seleccionar cliente", ["Existente", "Nuevo (manual)"], horizontal=True, key="modo_cliente")
+        modo_cliente = st.radio(
+            "Seleccionar cliente",
+            ["Existente", "Nuevo (manual)"],
+            horizontal=True,
+            key="modo_cliente_presupuesto"
+        )
         
         if modo_cliente == "Existente":
             if clientes_df.empty:
                 cliente = {"name": "", "tax_id": "", "address": ""}
             else:
-                cliente_sel = st.selectbox("Cliente", clientes_df["name"].tolist(), key="cliente_select_presupuesto")
+                cliente_sel = st.selectbox(
+                    "Cliente",
+                    clientes_df["name"].tolist(),
+                    key="cliente_select_presupuesto_v2"
+                )
                 cliente_row = clientes_df[clientes_df["name"] == cliente_sel].iloc[0]
-                cliente = {"name": cliente_row["name"], "tax_id": cliente_row["tax_id"], "address": cliente_row["address"]}
+                cliente = {
+                    "name": cliente_row["name"],
+                    "tax_id": cliente_row["tax_id"],
+                    "address": cliente_row["address"]
+                }
         else:
             cliente = {
-                "name": st.text_input("Nombre/Razón Social", value=cliente_pre["name"], key="manual_name_budget"),
-                "tax_id": st.text_input("RTN / NIF", value=cliente_pre["tax_id"], key="manual_taxid_budget"),
-                "address": st.text_input("Dirección", value=cliente_pre["address"], key="manual_address_budget")
+                "name": st.text_input("Nombre/Razón Social", value=cliente_pre["name"], key="manual_name_budget_v2"),
+                "tax_id": st.text_input("RTN / NIF", value=cliente_pre["tax_id"], key="manual_taxid_budget_v2"),
+                "address": st.text_input("Dirección", value=cliente_pre["address"], key="manual_address_budget_v2")
             }
 
-        fecha = st.date_input("Fecha del presupuesto", value=fecha_pre_dt, key="fecha_presupuesto_edit")
+        fecha = st.date_input("Fecha del presupuesto", value=fecha_pre_dt, key="fecha_presupuesto_v2")
         
         st.markdown("---")
         st.subheader("Líneas del presupuesto")
         
-        num_lineas = st.number_input("Número de líneas", min_value=1, max_value=20, value=max(len(lineas_pre), 1), key="num_lineas_budget")
+        num_lineas = st.number_input(
+            "Número de líneas",
+            min_value=1,
+            max_value=20,
+            value=max(len(lineas_pre), 1),
+            key="num_lineas_budget_v2"
+        )
         
         lista_productos = ["-- Manual --"]
         if not productos_df.empty:
@@ -2598,17 +2638,36 @@ elif menu == "📝 Presupuestos":
                             prod_default = p
                             break
                 
-                prod_sel = st.selectbox(f"Producto {i+1}", lista_productos, key=f"bud_prod_edit_{i}", index=lista_productos.index(prod_default) if prod_default in lista_productos else 0)
+                prod_sel = st.selectbox(
+                    f"Producto {i+1}",
+                    lista_productos,
+                    key=f"bud_prod_v2_{i}",
+                    index=lista_productos.index(prod_default) if prod_default in lista_productos else 0
+                )
                 
                 if prod_sel == "-- Manual --":
-                    desc_manual = st.text_input(f"Descripción {i+1}", value=lin_pre.get("description", "") if lin_pre else "", key=f"bud_desc_edit_{i}")
+                    desc_manual = st.text_input(
+                        f"Descripción {i+1}",
+                        value=lin_pre.get("description", "") if lin_pre else "",
+                        key=f"bud_desc_v2_{i}"
+                    )
                 else:
                     prod_info = productos_df[productos_df["name"] == prod_sel]
                     descripcion_producto = prod_info.iloc[0].get("description", "") if not prod_info.empty else ""
-                    desc_manual = st.text_area(f"Descripción {i+1} (editable)", value=lin_pre.get("description", "") if lin_pre else descripcion_producto, key=f"bud_desc_edit_{i}", height=80)
+                    desc_manual = st.text_area(
+                        f"Descripción {i+1} (editable)",
+                        value=lin_pre.get("description", "") if lin_pre else descripcion_producto,
+                        key=f"bud_desc_v2_{i}",
+                        height=80
+                    )
             
             with cols[1]:
-                cantidad = st.number_input(f"Cantidad {i+1}", min_value=1.0, value=float(lin_pre["quantity"]) if lin_pre else 1.0, key=f"bud_qty_edit_{i}")
+                cantidad = st.number_input(
+                    f"Cantidad {i+1}",
+                    min_value=1.0,
+                    value=float(lin_pre["quantity"]) if lin_pre else 1.0,
+                    key=f"bud_qty_v2_{i}"
+                )
             
             with cols[2]:
                 if prod_sel != "-- Manual --" and not productos_df.empty:
@@ -2626,9 +2685,14 @@ elif menu == "📝 Presupuestos":
                     vat_default = float(lin_pre.get("vat_percentage", vat_pct_pre)) if lin_pre else vat_pct_pre
                     irpf_default = float(lin_pre.get("irpf_percentage", irpf_pct_pre)) if lin_pre else irpf_pct_pre
                 
-                precio = st.number_input(f"Precio ud. {i+1}", min_value=0.0, value=precio_default, key=f"bud_price_edit_{i}")
-                vat = st.number_input(f"IVA % {i+1}", value=vat_default, key=f"bud_vat_edit_{i}")
-                irpf = st.number_input(f"IRPF % {i+1}", value=irpf_default, key=f"bud_irpf_edit_{i}")
+                precio = st.number_input(
+                    f"Precio ud. {i+1}",
+                    min_value=0.0,
+                    value=precio_default,
+                    key=f"bud_price_v2_{i}"
+                )
+                vat = st.number_input(f"IVA % {i+1}", value=vat_default, key=f"bud_vat_v2_{i}")
+                irpf = st.number_input(f"IRPF % {i+1}", value=irpf_default, key=f"bud_irpf_v2_{i}")
             
             with cols[3]:
                 base_linea = cantidad * precio
@@ -2637,7 +2701,10 @@ elif menu == "📝 Presupuestos":
                 total_linea = base_linea + vat_amount - irpf_amount
                 st.text(f"Total: {money(total_linea)}")
             
-            descripcion_linea = f"{prod_sel}\n{desc_manual.strip()}" if prod_sel != "-- Manual --" and desc_manual.strip() else (desc_manual.strip() if desc_manual.strip() else prod_sel)
+            descripcion_linea = (
+                f"{prod_sel}\n{desc_manual.strip()}" if prod_sel != "-- Manual --" and desc_manual.strip()
+                else (desc_manual.strip() if desc_manual.strip() else prod_sel)
+            )
             
             lineas.append({
                 "description": descripcion_linea,
@@ -2659,7 +2726,9 @@ elif menu == "📝 Presupuestos":
         else:
             base_total = vat_total = irpf_total = total = 0.0
 
+        # ============================================================
         # VISTA PREVIA PROFESIONAL
+        # ============================================================
         st.markdown("---")
         st.subheader("🔍 Vista previa del presupuesto")
         
@@ -2707,10 +2776,13 @@ elif menu == "📝 Presupuestos":
 
         st.markdown("---")
         
+        # ============================================================
+        # BOTONES DE ACCIÓN
+        # ============================================================
         col_acc1, col_acc2 = st.columns(2)
         
         with col_acc1:
-            if st.button("💾 Guardar presupuesto", key="guardar_presupuesto_edit", use_container_width=True):
+            if st.button("💾 Guardar presupuesto", key="guardar_presupuesto_v2"):
                 if not validar_nif_cif(cliente.get("tax_id", "")):
                     st.error("El NIF del cliente no es válido.")
                 else:
@@ -2729,6 +2801,7 @@ elif menu == "📝 Presupuestos":
                                 "vat_pct": lineas[0]["vat_percentage"] if lineas else 21,
                                 "irpf_pct": lineas[0]["irpf_percentage"] if lineas else 0,
                             }).eq("id", st.session_state.editing_budget_id).execute()
+                            
                             st.success(f"Presupuesto {st.session_state.budget_number_editing} actualizado correctamente.")
                             limpiar_estado_edicion()
                             get_budgets.clear()
@@ -2764,20 +2837,59 @@ elif menu == "📝 Presupuestos":
                             st.error(f"Error al guardar: {e}")
         
         with col_acc2:
-            empresa["user_id"] = user_id
-            vat_pct_nuevo = lineas[0]["vat_percentage"] if lineas else 21
-            numero_pdf_nuevo = st.session_state.budget_number_editing or obtener_siguiente_numero_presupuesto(user_id)
-            cliente_pdf_nuevo = {"name": cliente.get("name", ""), "tax_id": cliente.get("tax_id", ""), "address": cliente.get("address", "")}
-            
-            pdf_bytes_nuevo = None
-            if lineas and cliente.get("name"):
-                try:
-                    pdf_bytes_nuevo = make_budget_pdf(empresa, cliente_pdf_nuevo, lineas, base_total, vat_total, total, vat_pct_nuevo, budget_number=numero_pdf_nuevo)
-                except Exception:
-                    pdf_bytes_nuevo = None
-
-            if pdf_bytes_nuevo:
-                st.download_button("📄 Descargar PDF del presupuesto", pdf_bytes_nuevo, f"Presupuesto_{numero_pdf_nuevo}.pdf", mime="application/pdf", key="download_pdf_edit", use_container_width=True)
+            if st.button("📄 Generar PDF del presupuesto", key="pdf_presupuesto_v2"):
+                if not validar_nif_cif(cliente.get("tax_id", "")):
+                    st.error("El NIF del cliente no es válido.")
+                else:
+                    empresa["user_id"] = user_id
+                    vat_pct = lineas[0]["vat_percentage"] if lineas else 21
+                    
+                    if st.session_state.editing_budget_id and st.session_state.budget_number_editing:
+                        numero_pdf = st.session_state.budget_number_editing
+                    else:
+                        numero_pdf = obtener_siguiente_numero_presupuesto(user_id)
+                    
+                    cliente_pdf = {
+                        "name": cliente.get("name", ""),
+                        "tax_id": cliente.get("tax_id", ""),
+                        "address": cliente.get("address", "")
+                    }
+                    
+                    if empresa and cliente_pdf and lineas:
+                        pdf_bytes = make_budget_pdf(
+                            empresa, cliente_pdf, lineas,
+                            base_total, vat_total, total,
+                            vat_pct, budget_number=numero_pdf
+                        )
+                        if pdf_bytes:
+                            st.download_button(
+                                "⬇️ Descargar PDF",
+                                pdf_bytes,
+                                f"Presupuesto_{numero_pdf}.pdf",
+                                mime="application/pdf",
+                                key="download_pdf_v2"
+                            )
+                            destinatario = st.text_input(
+                                "Email para enviar presupuesto",
+                                key="email_presupuesto_v2",
+                                placeholder="cliente@ejemplo.com"
+                            )
+                            if st.button("📧 Enviar por email", key="send_budget_email_v2"):
+                                if not destinatario or "@" not in destinatario:
+                                    st.error("Introduce un email válido.")
+                                else:
+                                    with st.spinner("Enviando..."):
+                                        exito = enviar_factura_email(
+                                            destinatario,
+                                            f"Presupuesto {numero_pdf}",
+                                            "Adjunto le enviamos el presupuesto.",
+                                            pdf_bytes,
+                                            f"Presupuesto_{numero_pdf}.pdf"
+                                        )
+                                    if exito:
+                                        st.success("Presupuesto enviado correctamente")
+                                    else:
+                                        st.error("No se pudo enviar el email")
 
     # ============================================================
     # TAB HISTORIAL - CON VISTA DETALLADA + ESTADO + EMAIL
@@ -2806,7 +2918,7 @@ elif menu == "📝 Presupuestos":
                 column_config=column_config,
                 selection_mode="single-row",
                 on_select="rerun",
-                key="budgets_table_historial"
+                key="budgets_table_historial_v2"
             )
             
             if (event.selection and event.selection.rows and len(event.selection.rows) > 0):
@@ -2823,32 +2935,6 @@ elif menu == "📝 Presupuestos":
                         budget_data = budget_row.to_dict()
                     
                     st.markdown("---")
-
-                    # Preparación previa del PDF para descarga y envío por email
-                    cliente_pdf_hist = {
-                        "name": budget_data.get("client_name", ""),
-                        "tax_id": budget_data.get("client_tax_id", ""),
-                        "address": budget_data.get("client_address", "")
-                    }
-                    try:
-                        lineas_pdf_hist = json.loads(budget_data.get("lines", "[]"))
-                    except Exception:
-                        lineas_pdf_hist = []
-
-                    try:
-                        pdf_bytes_hist = make_budget_pdf(
-                            empresa,
-                            cliente_pdf_hist,
-                            lineas_pdf_hist,
-                            budget_data.get("base_total", 0),
-                            budget_data.get("vat_total", 0),
-                            budget_data.get("total", 0),
-                            budget_data.get("vat_pct", 21),
-                            budget_number=budget_number_sel
-                        )
-                    except Exception as e:
-                        pdf_bytes_hist = None
-                        st.error(f"Error al generar PDF: {e}")
                     
                     # VISTA DETALLADA LIMPIA
                     with st.container(border=True):
@@ -2857,7 +2943,7 @@ elif menu == "📝 Presupuestos":
                         with col_info1:
                             st.markdown(f"### 📄 Presupuesto {budget_number_sel}")
                             st.markdown(f"**Fecha:** {pd.to_datetime(budget_data.get('date', '')).strftime('%d/%m/%Y') if budget_data.get('date') else 'N/A'}")
-                            st.markdown(f"**Estado:** `{budget_data.get('status', 'pendiente')}`")
+                            st.markdown(f"**Estado:** {budget_data.get('status', 'pendiente')}")
                         
                         with col_info2:
                             st.markdown(f"**Cliente:** {budget_data.get('client_name', 'N/A')}")
@@ -2867,8 +2953,9 @@ elif menu == "📝 Presupuestos":
                         st.markdown("---")
                         
                         try:
-                            if lineas_pdf_hist:
-                                lineas_hist_df = pd.DataFrame(lineas_pdf_hist)
+                            lineas_db = json.loads(budget_data.get("lines", "[]"))
+                            if lineas_db:
+                                lineas_hist_df = pd.DataFrame(lineas_db)
                                 columnas_necesarias = ["description", "quantity", "unit_price", "total"]
                                 for col in columnas_necesarias:
                                     if col not in lineas_hist_df.columns:
@@ -2909,15 +2996,15 @@ elif menu == "📝 Presupuestos":
                     col1, col2, col3 = st.columns(3)
                     
                     with col1:
-                        if st.button("✏️ Editar", key=f"edit_btn_{budget_id}", use_container_width=True):
+                        if st.button("✏️ Editar", key=f"edit_btn_v2_{budget_id}"):
                             st.session_state.editing_budget_id = budget_id
                             st.session_state.edit_budget_data = budget_data
                             st.session_state.budget_number_editing = budget_number_sel
                             st.rerun()
                     
                     with col2:
-                        confirmado = st.checkbox("Confirmar eliminación", key=f"confirm_del_btn_{budget_id}")
-                        if st.button("🗑️ Eliminar", key=f"del_btn_{budget_id}", disabled=not confirmado, use_container_width=True):
+                        confirmado = st.checkbox("Confirmar eliminación", key=f"confirm_del_btn_v2_{budget_id}")
+                        if st.button("🗑️ Eliminar", key=f"del_btn_v2_{budget_id}", disabled=not confirmado):
                             try:
                                 supabase.table("budgets").delete().eq("id", budget_id).execute()
                                 st.success("Presupuesto eliminado.")
@@ -2928,34 +3015,46 @@ elif menu == "📝 Presupuestos":
                                 st.error(f"Error: {e}")
                     
                     with col3:
-                        if pdf_bytes_hist:
-                            st.download_button(
-                                "📄 Descargar PDF",
-                                pdf_bytes_hist,
-                                f"Presupuesto_{budget_number_sel}.pdf",
-                                mime="application/pdf",
-                                key=f"download_hist_btn_{budget_id}",
-                                use_container_width=True
+                        try:
+                            cliente_pdf = {"name": budget_data.get("client_name", ""), "tax_id": budget_data.get("client_tax_id", ""), "address": budget_data.get("client_address", "")}
+                            lineas_pdf = json.loads(budget_data.get("lines", "[]"))
+                            
+                            pdf_bytes_hist = make_budget_pdf(
+                                empresa, cliente_pdf, lineas_pdf,
+                                budget_data.get("base_total", 0),
+                                budget_data.get("vat_total", 0),
+                                budget_data.get("total", 0),
+                                budget_data.get("vat_pct", 21),
+                                budget_number=budget_number_sel
                             )
+                            
+                            if pdf_bytes_hist:
+                                st.download_button(
+                                    "📄 Descargar PDF",
+                                    pdf_bytes_hist,
+                                    f"Presupuesto_{budget_number_sel}.pdf",
+                                    mime="application/pdf",
+                                    key=f"download_hist_v2_{budget_id}"
+                                )
+                        except Exception as e:
+                            st.error(f"Error al generar PDF: {e}")
                     
                     # ACTUALIZAR ESTADO
                     st.markdown("---")
                     col_status1, col_status2 = st.columns([1, 2])
                     
                     with col_status1:
-                        estado_actual = budget_data.get("status", "pendiente").lower()
+                        estado_actual = budget_data.get("status", "pendiente")
                         nuevo_estado = st.radio(
                             "Estado del presupuesto",
                             ["pendiente", "aceptado"],
                             index=0 if estado_actual != "aceptado" else 1,
                             horizontal=True,
-                            key=f"estado_radio_{budget_id}"
+                            key=f"estado_radio_v2_{budget_id}"
                         )
                     
                     with col_status2:
-                        st.write("")
-                        st.write("")
-                        if st.button("💾 Actualizar estado", key=f"estado_btn_{budget_id}"):
+                        if st.button("💾 Actualizar estado", key=f"estado_btn_v2_{budget_id}"):
                             try:
                                 supabase.table("budgets").update({"status": nuevo_estado}).eq("id", budget_id).execute()
                                 st.success(f"Estado actualizado a: {nuevo_estado}")
@@ -2970,12 +3069,10 @@ elif menu == "📝 Presupuestos":
                     col_email1, col_email2 = st.columns([2, 1])
                     
                     with col_email1:
-                        email_cliente = st.text_input("Email del cliente", key=f"email_cliente_{budget_id}", placeholder="cliente@ejemplo.com")
+                        email_cliente = st.text_input("Email del cliente", key=f"email_cliente_v2_{budget_id}", placeholder="cliente@ejemplo.com")
                     
                     with col_email2:
-                        st.write("")
-                        st.write("")
-                        if st.button("📧 Enviar por email", key=f"email_btn_{budget_id}"):
+                        if st.button("📧 Enviar por email", key=f"email_btn_v2_{budget_id}"):
                             if not email_cliente or "@" not in email_cliente:
                                 st.error("Introduce un email válido.")
                             else:
@@ -2993,7 +3090,7 @@ elif menu == "📝 Presupuestos":
                                     else:
                                         st.error("No se pudo enviar el email")
                                 else:
-                                    st.error("No se pudo generar el PDF para su envío.")
+                                    st.error("Primero genera el PDF.")
         else:
             st.info("No hay presupuestos guardados aún.")
 # ════════════════════════════════════════════════════════════
