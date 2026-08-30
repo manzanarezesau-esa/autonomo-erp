@@ -1,4 +1,3 @@
-# pdf_utils.py
 import io
 import base64
 import re
@@ -400,16 +399,16 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
 # -----------------------------------------------------------
 def split_description_into_paragraphs(desc_text):
     """
-    Divide un texto largo en párrafos independientes y elimina
-    caracteres como el cuadrado (■) para evitar superposiciones con las viñetas.
+    Divide el texto en párrafos e ignora/elimina por completo todos los símbolos
+    de bloques negros o formas geométricas Unicode (rango U+2580 a U+25FF y U+FFFD).
     """
     if not desc_text:
         return [""]
     
     desc_text = str(desc_text).strip()
     
-    # Reemplazar cuadrados y caracteres especiales por saltos de línea
-    desc_text = re.sub(r'[■\u25a0\u25a1\u25aa\u25ab\u25fe\u25fd\uFFFD]', '\n', desc_text)
+    # Eliminar cualquier tipo de cuadro o forma geométrica (rango Unicode completo \u2580-\u25FF y \uFFFD)
+    desc_text = re.sub(r'[\u2580-\u25FF\uFFFD]', '', desc_text)
     
     raw_lines = desc_text.split('\n')
     paragraphs = []
@@ -419,15 +418,13 @@ def split_description_into_paragraphs(desc_text):
         if not line:
             continue
             
-        # Eliminar cualquier viñeta o cuadrado al inicio
-        cleaned = re.sub(r'^[•\-\*\s■\u25a0\u25a1\u25aa\u25ab\u25fe\u25fd\uFFFD]+', '', line).strip()
-        # Eliminar cualquier cuadrado remanente dentro del texto
-        cleaned = re.sub(r'[■\u25a0\u25a1\u25aa\u25ab\u25fe\u25fd\uFFFD]', '', cleaned).strip()
+        # Limpiar viñetas, caracteres invisibles o guiones iniciales sobrantes
+        cleaned = re.sub(r'^[•\-\*\s\u200b\uFEFF]+', '', line).strip()
         
         if not cleaned:
             continue
             
-        # Si un solo párrafo excede 300 caracteres sin saltos, dividir por palabras
+        # Si un párrafo excede 300 caracteres sin saltos, dividir por palabras
         if len(cleaned) > 300:
             words = cleaned.split(' ')
             chunk = []
