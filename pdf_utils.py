@@ -396,29 +396,38 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
     return _html_to_pdf(html_str)
 
 # -----------------------------------------------------------
-# PRESUPUESTO (REPORTLAB MULTIPÁGINA AUTOMÁTICO)
+# PRESUPUESTO (REPORTLAB MULTIPÁGINA Y SÍMBOLOS LIMPIOS)
 # -----------------------------------------------------------
 def split_description_into_paragraphs(desc_text):
     """
-    Divide un texto largo en párrafos independientes para permitir
-    salto de página automático en ReportLab.
+    Divide un texto largo en párrafos independientes y elimina
+    caracteres como el cuadrado (■) para evitar superposiciones con las viñetas.
     """
     if not desc_text:
         return [""]
     
-    desc_text = str(desc_text).strip().replace('■', '\n')
-    raw_lines = desc_text.split('\n')
+    desc_text = str(desc_text).strip()
     
+    # Reemplazar cuadrados y caracteres especiales por saltos de línea
+    desc_text = re.sub(r'[■\u25a0\u25a1\u25aa\u25ab\u25fe\u25fd\uFFFD]', '\n', desc_text)
+    
+    raw_lines = desc_text.split('\n')
     paragraphs = []
+    
     for line in raw_lines:
         line = line.strip()
         if not line:
             continue
-        cleaned = re.sub(r'^[•\-\*\s]+', '', line).strip()
+            
+        # Eliminar cualquier viñeta o cuadrado al inicio
+        cleaned = re.sub(r'^[•\-\*\s■\u25a0\u25a1\u25aa\u25ab\u25fe\u25fd\uFFFD]+', '', line).strip()
+        # Eliminar cualquier cuadrado remanente dentro del texto
+        cleaned = re.sub(r'[■\u25a0\u25a1\u25aa\u25ab\u25fe\u25fd\uFFFD]', '', cleaned).strip()
+        
         if not cleaned:
             continue
             
-        # Si un solo párrafo excede 300 caracteres sin saltos, lo divide por bloques de palabras
+        # Si un solo párrafo excede 300 caracteres sin saltos, dividir por palabras
         if len(cleaned) > 300:
             words = cleaned.split(' ')
             chunk = []
@@ -631,6 +640,7 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
     company_address = company.get('company_address', '')
 
     client_name = client.get('name', 'Cliente')
+    client_tax_id = client.get('tax_id') or client.get('nif') or client.get('cif') or client.get('client_tax_id') or ''
     client_address = client.get('address', '')
     budget_num = budget_number or '---'
 
@@ -669,8 +679,10 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
 
     story.append(Paragraph("PRESUPUESTO", title_style))
     story.append(Paragraph(f"<b>Cliente:</b> {client_name}", client_info_style))
+    if client_tax_id:
+        story.append(Paragraph(f"<b>NIF/CIF:</b> {client_tax_id}", client_info_style))
     if client_address:
-        story.append(Paragraph(client_address, company_info_style))
+        story.append(Paragraph(client_address, client_info_style))
     story.append(Spacer(1, 8))
 
     line_table = Table([['']], colWidths=[PRINTABLE_WIDTH], rowHeights=[2])
