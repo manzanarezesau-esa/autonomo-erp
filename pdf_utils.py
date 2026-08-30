@@ -1,19 +1,16 @@
 # pdf_utils.py
-import base64
-from datetime import date, datetime
 import io
+import base64
 import re
-
-from jinja2 import Template
 import qrcode
 from qrcode.image.pil import PilImage
+from jinja2 import Template
 import streamlit as st
 import weasyprint
-
 from verifactu_utils import generar_qr_verifactu
 
 # -----------------------------------------------------------
-# PLANTILLA DE FACTURA
+# PLANTILLA DE FACTURA (con leyenda Veri*Factu)
 # -----------------------------------------------------------
 DEFAULT_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="es">
@@ -44,6 +41,7 @@ body {
     max-height: 100px;
     width: auto;
     height: auto;
+    object-fit: contain;
 }
 .company-info {
     text-align: right;
@@ -178,8 +176,6 @@ td.amount {
     font-size: 9px;
     color: #4a5568;
 }
-ul { margin-left: 15px; padding-left: 5px; }
-li { margin-bottom: 3px; }
 </style>
 </head>
 <body>
@@ -236,7 +232,7 @@ NIF: {{ client.tax_id }}<br>
 <tbody>
 {% for item in lineas %}
 <tr>
-<td>{{ item.description_html|safe }}</td>
+<td>{{ item.description }}</td>
 <td>{{ item.quantity }}</td>
 <td class="amount">{{ "%.2f"|format(item.unit_price) }} €</td>
 <td class="amount">{{ "%.2f"|format(item.base_amount) }} €</td>
@@ -275,7 +271,7 @@ Sistema de facturación verificable / VERI*FACTU - Factura verificable en la sed
 </html>"""
 
 # -----------------------------------------------------------
-# PLANTILLA DE PRESUPUESTO HTML
+# PLANTILLA DE PRESUPUESTO (HTML - Estilo idéntico a Facturas)
 # -----------------------------------------------------------
 BUDGET_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="es">
@@ -295,17 +291,18 @@ body {
     align-items: flex-start;
     border-bottom: 3px solid #1e3a8a;
     padding-bottom: 15px;
-    margin-bottom: 20px;
+    margin-bottom: 25px;
 }
 .logo-container {
     flex: 0 0 auto;
-    margin-right: 20px;
+    margin-right: 30px;
 }
 .logo-container img {
-    max-width: 200px;
-    max-height: 90px;
+    max-width: 220px;
+    max-height: 100px;
     width: auto;
     height: auto;
+    object-fit: contain;
 }
 .company-info {
     text-align: right;
@@ -313,69 +310,75 @@ body {
 }
 .company-info h1 {
     color: #1e3a8a;
-    font-size: 22px;
+    font-size: 24px;
     font-weight: 700;
     margin-bottom: 4px;
 }
 .company-info p {
-    font-size: 10px;
+    font-size: 11px;
     line-height: 1.4;
     color: #4a5568;
+    margin-bottom: 2px;
 }
-.document-header {
+.invoice-header {
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
-    margin-bottom: 20px;
+    margin-bottom: 25px;
 }
-.document-title {
+.invoice-title {
     color: #1e3a8a;
-    font-size: 24px;
+    font-size: 26px;
     font-weight: 700;
+    margin-bottom: 10px;
 }
 .client-section {
-    margin: 15px 0;
+    margin: 20px 0;
     padding: 12px 15px;
     background-color: #f7fafc;
     border-left: 4px solid #1e3a8a;
     border-radius: 4px;
-    font-size: 11px;
 }
 .client-section strong {
     color: #1e3a8a;
     font-size: 12px;
     display: block;
-    margin-bottom: 4px;
+    margin-bottom: 5px;
 }
 table {
     width: 100%;
     border-collapse: collapse;
-    margin: 20px 0;
-    font-size: 10px;
+    margin: 25px 0;
+    font-size: 11px;
 }
 th {
     background-color: #1e3a8a;
     color: white;
-    padding: 8px 10px;
+    padding: 10px;
     text-align: left;
     font-weight: 600;
+    letter-spacing: 0.5px;
 }
 td {
-    padding: 8px 10px;
+    padding: 10px;
     border-bottom: 1px solid #e2e8f0;
     vertical-align: top;
     line-height: 1.4;
 }
+tr:last-child td {
+    border-bottom: 2px solid #1e3a8a;
+}
 td.amount {
     text-align: right;
-    white-space: nowrap;
+    font-family: 'Courier New', monospace;
 }
-ul {
-    margin-left: 15px;
-    padding-left: 5px;
+td ul {
+    margin: 4px 0 4px 18px;
+    padding: 0;
 }
-li {
-    margin-bottom: 2px;
+td li {
+    margin-bottom: 3px;
+    line-height: 1.4;
 }
 .totals {
     width: 40%;
@@ -384,7 +387,7 @@ li {
     background-color: #f7fafc;
     padding: 12px 15px;
     border-radius: 6px;
-    font-size: 11px;
+    font-size: 12px;
 }
 .totals p {
     margin-bottom: 5px;
@@ -392,7 +395,7 @@ li {
     justify-content: space-between;
 }
 .totals .total-final {
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 700;
     color: #1e3a8a;
     border-top: 1px solid #cbd5e0;
@@ -400,10 +403,10 @@ li {
     margin-top: 5px;
 }
 .footer {
-    margin-top: 40px;
-    font-size: 9px;
+    margin-top: 50px;
+    font-size: 10px;
     border-top: 1px solid #e2e8f0;
-    padding-top: 10px;
+    padding-top: 12px;
     text-align: center;
     color: #718096;
 }
@@ -413,73 +416,69 @@ li {
 <div class="header">
 {% if company.company_logo %}
 <div class="logo-container">
-    <img src="{{ company.company_logo }}" alt="Logo">
+<img src="{{ company.company_logo }}" alt="Logo">
 </div>
 {% endif %}
 <div class="company-info">
-    <h1>{{ company.company_name }}</h1>
-    <p>{{ company.company_address }}</p>
-    <p>NIF: {{ company.company_tax_id }}</p>
-    {% if company.company_phone or company.company_email %}
-    <p>Tel: {{ company.company_phone }} | Email: {{ company.company_email }}</p>
-    {% endif %}
+<h1>{{ company.company_name }}</h1>
+<p>{{ company.company_address }}</p>
+<p>NIF: {{ company.company_tax_id }}</p>
+<p>Tel: {{ company.company_phone }} | Email: {{ company.company_email }}</p>
 </div>
 </div>
 
-<div class="document-header">
-    <div>
-        <div class="document-title">PRESUPUESTO</div>
-        <p style="font-size: 13px; color: #4a5568;">Nº {{ budget_number }}</p>
-    </div>
-    <div style="text-align: right; font-size: 11px;">
-        <p><strong>Fecha:</strong> {{ date_today }}</p>
-    </div>
+<div class="invoice-header">
+<div>
+<div class="invoice-title">PRESUPUESTO</div>
+<p style="font-size: 14px; color: #4a5568;">Nº {{ budget_number }}</p>
+</div>
 </div>
 
 <div class="client-section">
-    <strong>DATOS DEL CLIENTE</strong>
-    {{ client.name }}<br>
-    {% if client.tax_id %}NIF: {{ client.tax_id }}<br>{% endif %}
-    {{ client.address }}
+<strong>DATOS DEL CLIENTE</strong>
+{{ client.name }}<br>
+NIF: {{ client.tax_id }}<br>
+{{ client.address }}
 </div>
 
 <table>
 <thead>
 <tr>
-    <th style="width: 55%;">Descripción</th>
-    <th style="width: 10%; text-align: center;">Cant.</th>
-    <th style="width: 15%; text-align: right;">Precio ud.</th>
-    <th style="width: 20%; text-align: right;">Total</th>
+<th style="width:55%">Descripción</th>
+<th style="width:10%">Cant.</th>
+<th style="width:15%">Precio ud.</th>
+<th style="width:20%">Total</th>
 </tr>
 </thead>
 <tbody>
 {% for item in lineas %}
 <tr>
-    <td>{{ item.description_html|safe }}</td>
-    <td style="text-align: center;">{{ item.quantity }}</td>
-    <td class="amount">{{ "%.2f"|format(item.unit_price) }} €</td>
-    <td class="amount"><strong>{{ "%.2f"|format(item.total) }} €</strong></td>
+<td>{{ item.description_html | safe if item.description_html else item.description }}</td>
+<td>{{ item.quantity }}</td>
+<td class="amount">{{ "%.2f"|format(item.unit_price) }} €</td>
+<td class="amount"><strong>{{ "%.2f"|format(item.total) }} €</strong></td>
 </tr>
 {% endfor %}
 </tbody>
 </table>
 
 <div class="totals">
-    <p><span>Base imponible:</span> <span>{{ "%.2f"|format(base_total) }} €</span></p>
-    <p><span>IVA ({{ vat_pct }}%):</span> <span>{{ "%.2f"|format(vat_total) }} €</span></p>
-    <p class="total-final"><span>TOTAL:</span> <span>{{ "%.2f"|format(total) }} €</span></p>
+<p><span>Base imponible:</span> <span>{{ "%.2f"|format(base_total) }} €</span></p>
+<p><span>IVA ({{ vat_pct }}%):</span> <span>{{ "%.2f"|format(vat_total) }} €</span></p>
+<p class="total-final"><span>TOTAL PRESUPUESTO:</span> <span>{{ "%.2f"|format(total) }} €</span></p>
 </div>
 
 <div class="footer">
-    Presupuesto válido por 30 días · Gracias por confiar en nosotros
+<span>Presupuesto válido por 30 días · Gracias por confiar en nosotros</span>
 </div>
 </body>
 </html>"""
 
 # -----------------------------------------------------------
-# Funciones Auxiliares
+# Utilidades
 # -----------------------------------------------------------
 def _logo_sanitized(url):
+    """Valida y limpia la URL del logo para WeasyPrint."""
     if not url:
         return ""
     url = str(url).strip()
@@ -487,23 +486,8 @@ def _logo_sanitized(url):
         return ""
     return url
 
-def _process_description(desc_text):
-    """Limpia caracteres duplicados (•, ■, -) y los transforma en HTML limpio."""
-    if not desc_text:
-        return ""
-    lines = [l.strip() for l in str(desc_text).strip().split('\n') if l.strip()]
-    has_bullets = any(re.match(r'^[•\-\■]\s*', l) for l in lines)
-    
-    if has_bullets:
-        html_items = []
-        for line in lines:
-            clean_line = re.sub(r'^[•\-\■]\s*', '', line)
-            html_items.append(f"<li>{clean_line}</li>")
-        return f"<ul>{''.join(html_items)}</ul>"
-    else:
-        return "<br>".join(lines)
-
 def get_qr_base64(invoice, client, company_config):
+    """Genera QR Veri*Factu con formato exacto de la AEAT."""
     invoice_number = invoice.get('invoice_number', '')
     if '-' in invoice_number:
         parts = invoice_number.split('-')
@@ -536,14 +520,45 @@ def get_qr_base64(invoice, client, company_config):
     return base64.b64encode(buffered.getvalue()).decode()
 
 def _html_to_pdf(html_str):
+    """Convierte HTML a PDF usando WeasyPrint."""
     try:
         return weasyprint.HTML(string=html_str).write_pdf()
     except Exception as e:
         st.error(f"Error generando PDF: {e}")
         return None
 
+def _process_description(desc_text):
+    """
+    Convierte texto con viñetas o saltos de línea en HTML limpio y estructurado.
+    - Elimina viñetas duplicadas (•, ■, -, *)
+    - Convierte a listas <ul><li>...</li></ul> sin redundancias
+    """
+    if not desc_text:
+        return ""
+    
+    desc_text = str(desc_text).strip()
+    lines = desc_text.split('\n')
+    
+    has_bullets = any(
+        re.match(r'^\s*[•\-\*■]\s', line) for line in lines if line.strip()
+    )
+    
+    if has_bullets:
+        items = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            cleaned = re.sub(r'^\s*[•\-\*■]\s*', '', line)
+            if cleaned:
+                items.append(f'<li>{cleaned}</li>')
+        return f'<ul>{"".join(items)}</ul>'
+    else:
+        clean_lines = [line.strip() for line in lines if line.strip()]
+        return '<br/>'.join(clean_lines)
+
 # -----------------------------------------------------------
-# Generación de PDF de Factura (WeasyPrint)
+# Generador PDF Factura (WeasyPrint)
 # -----------------------------------------------------------
 def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
     qr_base64 = get_qr_base64(invoice, client, company_config)
@@ -552,12 +567,10 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
 
     company_safe = dict(company_config)
     company_safe["company_logo"] = _logo_sanitized(company_safe.get("company_logo", ""))
-
-    lineas_processed = []
-    for item in (lineas or []):
-        item_copy = dict(item)
-        item_copy['description_html'] = _process_description(item.get('description', ''))
-        lineas_processed.append(item_copy)
+    company_safe.setdefault("company_phone", "")
+    company_safe.setdefault("company_email", "")
+    company_safe.setdefault("es_rectificativa", False)
+    company_safe.setdefault("factura_original_num", None)
 
     if template_css.strip():
         if "<head" in template_html.lower():
@@ -574,34 +587,40 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         client=client or {},
         company=company_safe,
         qr_base64=qr_base64,
-        lineas=lineas_processed
+        lineas=lineas or []
     )
     return _html_to_pdf(html_str)
 
 # -----------------------------------------------------------
-# Generación de PDF de Presupuesto (WeasyPrint con Logo)
+# Generador PDF Presupuesto (WeasyPrint - Mismo diseño que Facturas)
 # -----------------------------------------------------------
 def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_pct, budget_number=None):
-    company_safe = dict(company)
+    """
+    Genera el PDF del presupuesto usando WeasyPrint.
+    Utiliza el mismo motor, formato visual, renderizado de logo y limpieza de viñetas que las facturas.
+    """
+    company_safe = dict(company or {})
     company_safe["company_logo"] = _logo_sanitized(company_safe.get("company_logo", ""))
+    company_safe.setdefault("company_phone", "")
+    company_safe.setdefault("company_email", "")
 
-    lineas_processed = []
-    for item in lineas:
-        item_copy = dict(item)
-        item_copy['description_html'] = _process_description(item.get('description', ''))
-        item_copy['total'] = item.get('total', item.get('base_amount', 0))
-        lineas_processed.append(item_copy)
+    lineas_procesadas = []
+    if lineas:
+        for item in lineas:
+            item_copy = dict(item)
+            raw_desc = item_copy.get("description", "")
+            item_copy["description_html"] = _process_description(raw_desc)
+            lineas_procesadas.append(item_copy)
 
     template = Template(BUDGET_TEMPLATE)
     html_str = template.render(
         company=company_safe,
         client=client or {},
-        lineas=lineas_processed,
-        base_total=base_total,
-        vat_total=vat_total,
-        total=total,
-        vat_pct=vat_pct or 0,
-        budget_number=budget_number or "---",
-        date_today=date.today().strftime('%d/%m/%Y')
+        lineas=lineas_procesadas,
+        base_total=float(base_total or 0),
+        vat_total=float(vat_total or 0),
+        total=float(total or 0),
+        vat_pct=float(vat_pct or 21),
+        budget_number=budget_number or "---"
     )
     return _html_to_pdf(html_str)
