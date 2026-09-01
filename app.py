@@ -1205,17 +1205,21 @@ elif menu == "💰 Ventas":
                             "vat_amount": factura_row["vat_amount"], "irpf_amount": factura_row["irpf_amount"],
                             "total": factura_row["total"]
                         }]
+                        # CORRECCIÓN FUGA DE DATOS: company_config sin AUTONOMO
                         try:
                             config_res = supabase.table("settings").select("*").eq("user_id", user_id).execute()
-                            company_config = config_res.data[0] if config_res.data else {
-                                "company_name": AUTONOMO_NAME, "company_tax_id": AUTONOMO_TAX_ID,
-                                "company_address": AUTONOMO_ADDRESS, "company_iban": AUTONOMO_IBAN,
-                                "company_logo": "", "codigo_html": "", "codigo_css": ""
-                            }
+                            if config_res.data and len(config_res.data) > 0:
+                                company_config = config_res.data[0]
+                            else:
+                                company_config = {
+                                    "company_name": "", "company_tax_id": "",
+                                    "company_address": "", "company_iban": "",
+                                    "company_logo": "", "codigo_html": "", "codigo_css": ""
+                                }
                         except Exception:
                             company_config = {
-                                "company_name": AUTONOMO_NAME, "company_tax_id": AUTONOMO_TAX_ID,
-                                "company_address": AUTONOMO_ADDRESS, "company_iban": AUTONOMO_IBAN,
+                                "company_name": "", "company_tax_id": "",
+                                "company_address": "", "company_iban": "",
                                 "company_logo": "", "codigo_html": "", "codigo_css": ""
                             }
                         if factura_row.get("tipo") == "rectificativa":
@@ -1496,7 +1500,6 @@ elif menu == "🛒 Compras":
                             st.error(f"Error: {e}")
     else:
         st.info("No hay gastos registrados.")
-
 # ════════════════════════════════════════════════════════════
 # EMPLEADOS (CON NÓMINAS Y SEGURIDAD SOCIAL)
 # ════════════════════════════════════════════════════════════
@@ -2103,395 +2106,23 @@ elif menu == "📒 Contabilidad":
         col_b2.metric("Pasivo", money(pasivo_corriente))
         col_b3.metric("Patrimonio Neto", money(patrimonio_neto))
         st.caption("Balance simplificado.")
-
 # ════════════════════════════════════════════════════════════
-# IMPUESTOS TRIMESTRALES
-# ════════════════════════════════════════════════════════════
-elif menu == "🏛️ Impuestos Trimestrales":
-    st.title("Liquidación Trimestral de IVA e IRPF")
-    hoy = date.today()
-    anio_actual = hoy.year
-    mes_actual = hoy.month
-    if mes_actual <= 3: trimestre_actual = "1T (Ene-Mar)"
-    elif mes_actual <= 6: trimestre_actual = "2T (Abr-Jun)"
-    elif mes_actual <= 9: trimestre_actual = "3T (Jul-Sep)"
-    else: trimestre_actual = "4T (Oct-Dic)"
-    
-    anios_disponibles = list(range(anio_actual - 5, anio_actual + 6))
-    anio = st.selectbox("Año", anios_disponibles, index=5)
-    
-    trimestres = ["1T (Ene-Mar)","2T (Abr-Jun)","3T (Jul-Sep)","4T (Oct-Dic)"]
-    trimestre = st.selectbox("Trimestre", trimestres, index=trimestres.index(trimestre_actual))
-    
-    meses_trim = {
-        "1T (Ene-Mar)": ["Enero","Febrero","Marzo"],
-        "2T (Abr-Jun)": ["Abril","Mayo","Junio"],
-        "3T (Jul-Sep)": ["Julio","Agosto","Septiembre"],
-        "4T (Oct-Dic)": ["Octubre","Noviembre","Diciembre"]
-    }
-    meses = meses_trim[trimestre]
-    inv = get_invoices(user_id)
-    exp = get_expenses(user_id)
-    if not inv.empty:
-        inv["date_dt"] = pd.to_datetime(inv["date"], errors="coerce")
-        inv["year"] = inv["date_dt"].dt.year
-        inv = inv[(inv["year"] == anio) & (inv["month"].isin(meses))]
-    if not exp.empty:
-        exp["date_dt"] = pd.to_datetime(exp["date"], errors="coerce")
-        exp["year"] = exp["date_dt"].dt.year
-        exp = exp[(exp["year"] == anio) & (exp["month"].isin(meses))]
-    base_ventas = inv["base_amount"].sum() if not inv.empty else 0.0
-    iva_repercutido = inv["vat_amount"].sum() if not inv.empty else 0.0
-    base_compras = exp["base_amount"].sum() if not exp.empty else 0.0
-    iva_soportado = exp["vat_amount"].sum() if not exp.empty else 0.0
-    irpf_retenido = inv["irpf_amount"].sum() if not inv.empty else 0.0
-    beneficio_neto = base_ventas - base_compras
-    pago_fraccionado = beneficio_neto * 0.20
-    if pago_fraccionado < 0: pago_fraccionado = 0.0
-    iva_ingresar = max(iva_repercutido - iva_soportado, 0)
-    
-    st.subheader(f"Resumen {trimestre} {anio}")
-    col1,col2,col3 = st.columns(3)
-    col1.metric("Ventas (base)", money(base_ventas))
-    col2.metric("IVA repercutido", money(iva_repercutido))
-    col3.metric("IRPF retenido", money(irpf_retenido))
-    col4,col5,col6 = st.columns(3)
-    col4.metric("Compras (base)", money(base_compras))
-    col5.metric("IVA soportado", money(iva_soportado))
-    col6.metric("IVA a ingresar", money(iva_ingresar))
-    st.markdown("---")
-    st.subheader("Pago fraccionado IRPF")
-    col7,col8,col9 = st.columns(3)
-    col7.metric("Beneficio neto", money(beneficio_neto))
-    col8.metric("% aplicado", "20 %")
-    col9.metric("💶 Pago fraccionado", money(pago_fraccionado))
-    
-    st.markdown("---")
-    st.subheader("📄 Modelo 303")
-    
-    if st.button("Generar Modelo 303"):
-        try:
-            config_res = supabase.table("settings").select("company_tax_id, company_name").eq("user_id", user_id).execute()
-            if config_res.data:
-                nif_emisor = config_res.data[0].get("company_tax_id", "")
-                nombre_emisor = config_res.data[0].get("company_name", "")
-            else:
-                nif_emisor = AUTONOMO_TAX_ID
-                nombre_emisor = AUTONOMO_NAME
-        except Exception:
-            nif_emisor = AUTONOMO_TAX_ID
-            nombre_emisor = AUTONOMO_NAME
-        
-        st.markdown("### Opciones de descarga")
-        col_desc1, col_desc2 = st.columns(2)
-        
-        with col_desc1:
-            st.markdown("**📄 Borrador PDF**")
-            try:
-                pdf_bytes_303 = generar_pdf_303(
-                    anio, trimestre, base_ventas, iva_repercutido,
-                    base_compras, iva_soportado, irpf_retenido,
-                    beneficio_neto, pago_fraccionado, iva_ingresar
-                )
-                if pdf_bytes_303:
-                    st.download_button("⬇️ Descargar PDF", pdf_bytes_303, f"Modelo_303_{anio}_{trimestre.replace(' ','')}.pdf", mime="application/pdf", key="descargar_pdf_303")
-            except Exception as e:
-                st.error(f"Error: {e}")
-        
-        with col_desc2:
-            st.markdown("**💻 Fichero AEAT**")
-            try:
-                fichero_completo = generar_fichero_aeat_303(
-                    anio, trimestre, base_ventas, iva_repercutido,
-                    base_compras, iva_soportado, nif_emisor, nombre_emisor
-                )
-                st.download_button("⬇️ Descargar fichero", fichero_completo.encode('utf-8'), f"303_{anio}_{trimestre.replace(' ','')}.txt", mime="text/plain", key="descargar_fichero_303")
-                es_valido, mensaje = validar_fichero_aeat(fichero_completo)
-                if es_valido:
-                    st.success(mensaje)
-                else:
-                    st.warning(mensaje)
-            except Exception as e:
-                st.error(f"Error: {e}")
-
-# ════════════════════════════════════════════════════════════
-# CONCILIACIÓN BANCARIA
-# ════════════════════════════════════════════════════════════
-elif menu == "🏦 Conciliación Bancaria":
-    st.title("Conciliación Bancaria")
-    tab1, tab2 = st.tabs(["Cargar CSV", "GoCardless"])
-    with tab1:
-        st.subheader("Cargar extracto bancario (CSV)")
-        archivo_csv = st.file_uploader("Selecciona archivo CSV", type="csv")
-        if archivo_csv:
-            try:
-                df_banco = pd.read_csv(archivo_csv)
-                st.write("Vista previa:"); st.dataframe(df_banco.head(10))
-                if st.button("Importar movimientos (CSV)"):
-                    for _, row in df_banco.iterrows():
-                        try:
-                            supabase.table("bank_transactions").insert({
-                                "user_id": user_id,
-                                "date": str(row.get("date", "")),
-                                "description": str(row.get("description", "")),
-                                "amount": float(row.get("amount", 0))
-                            }).execute()
-                        except Exception as e:
-                            st.error(f"Error: {e}")
-                    st.success("Movimientos importados.")
-                    get_bank_transactions.clear()
-                    st.rerun()
-            except Exception as e:
-                st.error(f"Error al leer CSV: {e}")
-    with tab2:
-        st.subheader("Importar desde GoCardless")
-        token_bancos = obtener_token_gocardless()
-        if token_bancos:
-            try:
-                bancos = obtener_bancos_disponibles(token_bancos, "ES")
-            except Exception:
-                bancos = []
-            if bancos:
-                banco_dict = {b.get("name", "Desconocido"): b.get("id", "") for b in bancos}
-                banco_seleccionado = st.selectbox("🏦 Selecciona tu banco", options=list(banco_dict.keys()))
-                if "gocardless_step" not in st.session_state:
-                    st.session_state.gocardless_step = "idle"
-                if st.session_state.gocardless_step == "idle":
-                    if st.button("🔌 Conectar con banco"):
-                        institution_id = banco_dict[banco_seleccionado]
-                        exito, link, req_id = iniciar_conexion_gocardless(institution_id)
-                        if exito:
-                            st.session_state.gocardless_link = link
-                            st.session_state.gocardless_req_id = req_id
-                            st.session_state.gocardless_step = "waiting_auth"
-                            st.rerun()
-                        else:
-                            st.error(link)
-                elif st.session_state.gocardless_step == "waiting_auth":
-                    link = st.session_state.get("gocardless_link", "#")
-                    st.info(f"🔗 [Abrir enlace de autorización]({link})")
-                    if st.button("✅ He autorizado la cuenta"):
-                        exito, mensaje, df = completar_importacion(user_id, supabase)
-                        if exito:
-                            st.success(mensaje)
-                            if df is not None and not df.empty:
-                                st.dataframe(df.head(10))
-                            st.session_state.gocardless_step = "idle"
-                            get_bank_transactions.clear()
-                        else:
-                            st.error(mensaje)
-                        st.rerun()
-            else:
-                st.info("No se pudieron cargar los bancos.")
-        else:
-            st.error("No se pudo autenticar con GoCardless.")
-    
-    st.subheader("Movimientos sin conciliar")
-    transacciones = get_bank_transactions(user_id)
-    if not transacciones.empty:
-        for idx, mov in transacciones.iterrows():
-            with st.expander(f"{mov['date']} - {mov['description']} - {money(mov['amount'])}"):
-                col1, col2 = st.columns(2)
-                with col1:
-                    with st.form(key=f"form_fact_{idx}"):
-                        facturas = get_invoices(user_id)
-                        factura_seleccionada = st.selectbox("Emparejar con factura", ["Ninguna"] + (facturas["invoice_number"].tolist() if not facturas.empty else []), key=f"fact_{idx}")
-                        if st.form_submit_button("Vincular factura"):
-                            if factura_seleccionada != "Ninguna":
-                                id_factura = facturas.loc[facturas["invoice_number"] == factura_seleccionada, "id"].values[0]
-                                try:
-                                    supabase.table("bank_transactions").update({"matched_invoice_id": id_factura}).eq("id", mov["id"]).execute()
-                                    st.success("Factura vinculada")
-                                    get_bank_transactions.clear()
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Error: {e}")
-                with col2:
-                    with st.form(key=f"form_gasto_{idx}"):
-                        gastos = get_expenses(user_id)
-                        gasto_seleccionado = st.selectbox("Emparejar con gasto", ["Ninguno"] + (gastos["expense_number"].tolist() if not gastos.empty else []), key=f"gasto_{idx}")
-                        if st.form_submit_button("Vincular gasto"):
-                            if gasto_seleccionado != "Ninguno":
-                                id_gasto = gastos.loc[gastos["expense_number"] == gasto_seleccionado, "id"].values[0]
-                                try:
-                                    supabase.table("bank_transactions").update({"matched_expense_id": id_gasto}).eq("id", mov["id"]).execute()
-                                    st.success("Gasto vinculado")
-                                    get_bank_transactions.clear()
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Error: {e}")
-    else:
-        st.info("No hay movimientos bancarios.")
-
-# ════════════════════════════════════════════════════════════
-# DASHBOARDS MEJORADO
-# ════════════════════════════════════════════════════════════
-elif menu == "📊 Dashboards":
-    st.title("📊 Dashboards de Facturación")
-    
-    invoices = get_invoices(user_id)
-    expenses = get_expenses(user_id)
-    
-    if invoices.empty and expenses.empty:
-        st.info("No hay datos para mostrar.")
-        st.stop()
-    
-    if not invoices.empty:
-        invoices["date_dt"] = pd.to_datetime(invoices["date"], errors="coerce")
-        invoices["year"] = invoices["date_dt"].dt.year
-        invoices["month_name"] = invoices["date_dt"].dt.month.apply(lambda x: LISTA_MESES[x-1] if 1 <= x <= 12 else "Desconocido")
-        invoices["month_num"] = invoices["date_dt"].dt.month
-    
-    if not expenses.empty:
-        expenses["date_dt"] = pd.to_datetime(expenses["date"], errors="coerce")
-        expenses["year"] = expenses["date_dt"].dt.year
-        expenses["month_name"] = expenses["date_dt"].dt.month.apply(lambda x: LISTA_MESES[x-1] if 1 <= x <= 12 else "Desconocido")
-        expenses["month_num"] = expenses["date_dt"].dt.month
-    
-    st.subheader("🔍 Filtros")
-    col_f1, col_f2, col_f3 = st.columns(3)
-    with col_f1:
-        anios_disponibles = set()
-        if not invoices.empty: anios_disponibles.update(invoices["year"].dropna().unique())
-        if not expenses.empty: anios_disponibles.update(expenses["year"].dropna().unique())
-        anios_disponibles = sorted(anios_disponibles, reverse=True)
-        year_seleccionado = st.selectbox("📅 Año", anios_disponibles, index=0 if anios_disponibles else 0)
-    with col_f2:
-        opciones_meses = ["Todos"] + LISTA_MESES
-        mes_seleccionado = st.selectbox("📆 Mes", opciones_meses, index=0)
-    with col_f3:
-        tipo_grafico = st.selectbox("📈 Tipo", ["Barras", "Líneas", "Área"], index=0)
-    
-    data_inv = invoices[invoices["year"] == year_seleccionado].copy() if not invoices.empty else pd.DataFrame()
-    data_exp = expenses[expenses["year"] == year_seleccionado].copy() if not expenses.empty else pd.DataFrame()
-    
-    if mes_seleccionado != "Todos":
-        if not data_inv.empty: data_inv = data_inv[data_inv["month_name"] == mes_seleccionado]
-        if not data_exp.empty: data_exp = data_exp[data_exp["month_name"] == mes_seleccionado]
-    
-    if data_inv.empty and data_exp.empty:
-        st.warning("No hay datos en el período.")
-        st.stop()
-    
-    st.markdown("---")
-    st.subheader("📊 Indicadores Clave")
-    
-    total_ingresos = data_inv["total"].sum() if not data_inv.empty else 0.0
-    total_gastos = data_exp["total"].sum() if not data_exp.empty else 0.0
-    num_facturas = len(data_inv) if not data_inv.empty else 0
-    beneficio = total_ingresos - total_gastos
-    promedio_factura = total_ingresos / num_facturas if num_facturas > 0 else 0
-    iva_repercutido = data_inv["vat_amount"].sum() if not data_inv.empty else 0.0
-    iva_soportado = data_exp["vat_amount"].sum() if not data_exp.empty else 0.0
-    
-    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-    kpi1.metric("💰 Ingresos", money(total_ingresos))
-    kpi2.metric("📄 Facturas", num_facturas)
-    kpi3.metric("🧾 Gastos", money(total_gastos))
-    kpi4.metric("📊 Promedio", money(promedio_factura))
-    
-    kpi5, kpi6, kpi7, kpi8 = st.columns(4)
-    kpi5.metric("🔥 Beneficio", money(beneficio))
-    kpi6.metric("IVA Repercutido", money(iva_repercutido))
-    kpi7.metric("IVA Soportado", money(iva_soportado))
-    kpi8.metric("IVA Neto", money(iva_repercutido - iva_soportado))
-    
-    st.markdown("---")
-    st.subheader("📈 Ingresos vs Gastos")
-    
-    if mes_seleccionado == "Todos":
-        ing_mensual = data_inv.groupby(["month_num", "month_name"])["total"].sum().reset_index().sort_values("month_num") if not data_inv.empty else pd.DataFrame(columns=["month_num", "month_name", "total"])
-        gas_mensual = data_exp.groupby(["month_num", "month_name"])["total"].sum().reset_index().sort_values("month_num") if not data_exp.empty else pd.DataFrame(columns=["month_num", "month_name", "total"])
-        meses_todos = pd.DataFrame({"month_num": range(1, 13), "month_name": LISTA_MESES})
-        df_grafico = meses_todos.merge(ing_mensual[["month_num", "total"]].rename(columns={"total": "ingresos"}), on="month_num", how="left").merge(gas_mensual[["month_num", "total"]].rename(columns={"total": "gastos"}), on="month_num", how="left").fillna(0)
-        x_labels = df_grafico["month_name"].tolist()
-        titulo = f"Ingresos vs Gastos {year_seleccionado}"
-    else:
-        if not data_inv.empty:
-            data_inv["day"] = data_inv["date_dt"].dt.day
-            ing_diario = data_inv.groupby("day")["total"].sum().reset_index()
-        else:
-            ing_diario = pd.DataFrame(columns=["day", "total"])
-        if not data_exp.empty:
-            data_exp["day"] = data_exp["date_dt"].dt.day
-            gas_diario = data_exp.groupby("day")["total"].sum().reset_index()
-        else:
-            gas_diario = pd.DataFrame(columns=["day", "total"])
-        dias_todos = pd.DataFrame({"day": range(1, 32)})
-        df_grafico = dias_todos.merge(ing_diario.rename(columns={"total": "ingresos"}), on="day", how="left").merge(gas_diario.rename(columns={"total": "gastos"}), on="day", how="left").fillna(0)
-        x_labels = [str(d) for d in df_grafico["day"]]
-        titulo = f"Ingresos vs Gastos {mes_seleccionado} {year_seleccionado}"
-    
-    if not df_grafico.empty:
-        fig, ax = plt.subplots(figsize=(12, 6))
-        x_pos = range(len(x_labels))
-        width = 0.35
-        if tipo_grafico == "Barras":
-            ax.bar([p - width/2 for p in x_pos], df_grafico["ingresos"], width, label="Ingresos", color="#10B981")
-            ax.bar([p + width/2 for p in x_pos], df_grafico["gastos"], width, label="Gastos", color="#EF4444")
-        elif tipo_grafico == "Líneas":
-            ax.plot(x_pos, df_grafico["ingresos"], marker="o", label="Ingresos", color="#10B981", linewidth=2)
-            ax.plot(x_pos, df_grafico["gastos"], marker="s", label="Gastos", color="#EF4444", linewidth=2)
-        else:
-            ax.fill_between(x_pos, df_grafico["ingresos"], alpha=0.5, label="Ingresos", color="#10B981")
-            ax.fill_between(x_pos, df_grafico["gastos"], alpha=0.5, label="Gastos", color="#EF4444")
-        ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:,.0f} €"))
-        ax.set_xticks(x_pos)
-        ax.set_xticklabels(x_labels, rotation=45, ha="right")
-        ax.set_title(titulo, fontweight="bold")
-        ax.legend()
-        ax.grid(axis="y", linestyle="--", alpha=0.7)
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-        fig.tight_layout()
-        st.pyplot(fig)
-    
-    st.markdown("---")
-    col_g1, col_g2 = st.columns(2)
-    with col_g1:
-        st.subheader("🏆 Top Clientes")
-        if not data_inv.empty and "client_name" in data_inv.columns:
-            top_clientes = data_inv.groupby("client_name")["total"].sum().sort_values(ascending=False).head(5)
-            if not top_clientes.empty:
-                fig2, ax2 = plt.subplots(figsize=(8, 5))
-                ax2.barh(range(len(top_clientes)), top_clientes.values, color="#1E3A8A")
-                ax2.set_yticks(range(len(top_clientes)))
-                ax2.set_yticklabels(top_clientes.index, fontsize=10)
-                ax2.invert_yaxis()
-                ax2.set_title("Top 5 Clientes", fontweight="bold")
-                fig2.tight_layout()
-                st.pyplot(fig2)
-    with col_g2:
-        st.subheader("📊 Estados de Facturas")
-        if not data_inv.empty and "status" in data_inv.columns:
-            estados = data_inv["status"].value_counts()
-            if not estados.empty:
-                fig3, ax3 = plt.subplots(figsize=(8, 5))
-                colores = {"pendiente": "#F59E0B", "pagada": "#10B981", "vencida": "#EF4444", "anulada": "#6B7280", "rectificada": "#3B82F6"}
-                colors_list = [colores.get(e, "#6B7280") for e in estados.index]
-                ax3.pie(estados.values, labels=estados.index, autopct='%1.1f%%', colors=colors_list, startangle=90)
-                ax3.set_title("Estado de Facturas", fontweight="bold")
-                fig3.tight_layout()
-                st.pyplot(fig3)
-                
-
- 
-# ════════════════════════════════════════════════════════════
-# PRESUPUESTOS (Edición integrada en Historial)
+# PRESUPUESTOS (CORREGIDO - sin fuga de datos)
 # ════════════════════════════════════════════════════════════
 elif menu == "📝 Presupuestos":
     st.title("📝 Presupuestos")
     
+    # CORRECCIÓN FUGA DE DATOS: sin AUTONOMO_NAME ni AUTONOMO_TAX_ID
     try:
         config_res = supabase.table("settings").select("*").eq("user_id", user_id).execute()
-        if config_res.data:
+        if config_res.data and len(config_res.data) > 0:
             empresa = config_res.data[0]
             if "user_id" not in empresa:
                 empresa["user_id"] = user_id
         else:
-            empresa = {"user_id": user_id, "company_name": AUTONOMO_NAME, "company_tax_id": AUTONOMO_TAX_ID, "company_address": AUTONOMO_ADDRESS, "company_iban": AUTONOMO_IBAN, "company_phone": "", "company_email": "", "company_logo": ""}
+            empresa = {"user_id": user_id, "company_name": "", "company_tax_id": "", "company_address": "", "company_iban": "", "company_phone": "", "company_email": "", "company_logo": ""}
     except Exception:
-        empresa = {"user_id": user_id, "company_name": AUTONOMO_NAME, "company_tax_id": AUTONOMO_TAX_ID, "company_address": AUTONOMO_ADDRESS, "company_iban": AUTONOMO_IBAN, "company_phone": "", "company_email": "", "company_logo": ""}
+        empresa = {"user_id": user_id, "company_name": "", "company_tax_id": "", "company_address": "", "company_iban": "", "company_phone": "", "company_email": "", "company_logo": ""}
 
     # ============================================================
     # GESTIÓN DE ESTADO PARA EDICIÓN
@@ -2633,9 +2264,6 @@ elif menu == "📝 Presupuestos":
     # TAB 2: HISTORIAL Y EDICIÓN INTEGRADA
     # ============================================================
     with tab_historial:
-        # --------------------------------------------------------
-        # SUB-MODO A: FORMULARIO DE EDICIÓN EN EL HISTORIAL
-        # --------------------------------------------------------
         if st.session_state.editing_budget_id and st.session_state.edit_budget_data:
             budget_data = st.session_state.edit_budget_data
             b_num_edit = st.session_state.budget_number_editing
@@ -2789,9 +2417,6 @@ elif menu == "📝 Presupuestos":
                     limpiar_estado_edicion()
                     st.rerun()
 
-        # --------------------------------------------------------
-        # SUB-MODO B: TABLA HISTORIAL Y DETALLES (MODO NORMAL)
-        # --------------------------------------------------------
         else:
             st.subheader("Presupuestos guardados")
             budgets_df = get_budgets(user_id)
@@ -2834,7 +2459,6 @@ elif menu == "📝 Presupuestos":
                         
                         st.markdown("---")
                         
-                        # VISTA DETALLADA
                         with st.container(border=True):
                             col_info1, col_info2 = st.columns(2)
                             
@@ -2883,7 +2507,6 @@ elif menu == "📝 Presupuestos":
                         
                         st.markdown("---")
                         
-                        # BOTONES DE ACCIÓN
                         col1, col2, col3 = st.columns(3)
                         
                         with col1:
@@ -2930,7 +2553,6 @@ elif menu == "📝 Presupuestos":
                             except Exception as e:
                                 st.error(f"Error al generar PDF: {e}")
                         
-                        # ACTUALIZAR ESTADO
                         st.markdown("---")
                         col_status1, col_status2 = st.columns([1, 2])
                         
@@ -2955,7 +2577,6 @@ elif menu == "📝 Presupuestos":
                                 except Exception as e:
                                     st.error(f"Error al actualizar estado: {e}")
                         
-                        # ENVIAR POR EMAIL
                         st.markdown("---")
                         col_email1, col_email2 = st.columns([2, 1])
                         
@@ -2984,6 +2605,7 @@ elif menu == "📝 Presupuestos":
                                         st.error("Primero genera el PDF.")
             else:
                 st.info("No hay presupuestos guardados aún.")
+
 # ════════════════════════════════════════════════════════════
 # COLABORADORES
 # ════════════════════════════════════════════════════════════
@@ -2992,7 +2614,7 @@ elif menu == "👥 Colaboradores":
     st.info("Funcionalidad en desarrollo.")
 
 # ════════════════════════════════════════════════════════════
-# PANEL DE ADMINISTRACIÓN (CORREGIDO)
+# PANEL DE ADMINISTRACIÓN
 # ════════════════════════════════════════════════════════════
 elif menu == "🔐 Panel Admin":
     st.title("🔐 Panel de Administración")
@@ -3410,27 +3032,33 @@ elif menu == "💳 Suscripción":
     st.caption("Los pagos se procesan de forma segura a través de Stripe. Puedes cancelar en cualquier momento.")
 
 # ════════════════════════════════════════════════════════════
-# CONFIGURACIÓN (COMPLETA)
+# CONFIGURACIÓN (CORREGIDA - sin fuga de datos)
 # ════════════════════════════════════════════════════════════
 elif menu == "⚙️ Configuración":
     st.title("Configuración de empresa y plantillas")
+    
+    # CORRECCIÓN FUGA DE DATOS: campos vacíos para usuarios sin settings
     try:
         config_res = supabase.table("settings").select("*").eq("user_id", user_id).execute()
-        settings = config_res.data[0] if config_res.data else {}
+        if config_res.data and len(config_res.data) > 0:
+            settings = config_res.data[0]
+        else:
+            settings = {}
     except Exception:
         settings = {}
-    company_name = settings.get("company_name") or AUTONOMO_NAME
-    tax_id = settings.get("company_tax_id") or AUTONOMO_TAX_ID
-    address = settings.get("company_address") or AUTONOMO_ADDRESS
-    iban = settings.get("company_iban") or AUTONOMO_IBAN
-    company_logo = settings.get("company_logo") or ""
-    company_phone = settings.get("company_phone") or ""
-    company_email = settings.get("company_email") or ""
-    nombre_plantilla = settings.get("nombre_plantilla") or "default"
-    template_html = settings.get("codigo_html") or ""
-    template_css = settings.get("codigo_css") or ""
-    budget_html = settings.get("budget_html") or ""
-    budget_css = settings.get("budget_css") or ""
+    
+    company_name = settings.get("company_name", "")
+    tax_id = settings.get("company_tax_id", "")
+    address = settings.get("company_address", "")
+    iban = settings.get("company_iban", "")
+    company_logo = settings.get("company_logo", "")
+    company_phone = settings.get("company_phone", "")
+    company_email = settings.get("company_email", "")
+    nombre_plantilla = settings.get("nombre_plantilla", "default")
+    template_html = settings.get("codigo_html", "")
+    template_css = settings.get("codigo_css", "")
+    budget_html = settings.get("budget_html", "")
+    budget_css = settings.get("budget_css", "")
 
     with st.form("config_form"):
         company_name = st.text_input("Nombre de la empresa / autónomo", value=company_name)
