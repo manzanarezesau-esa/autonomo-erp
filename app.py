@@ -3446,9 +3446,8 @@ elif menu == "💳 Suscripción":
     st.markdown("---")
     st.caption("Los pagos se procesan de forma segura a través de Stripe. Puedes cancelar en cualquier momento.")
 
-
 # ════════════════════════════════════════════════════════════
-# CONFIGURACIÓN (CON SUBIDA DE LOGO EN TIEMPO REAL)
+# CONFIGURACIÓN (CORREGIDA - Subida de logo con vista previa)
 # ════════════════════════════════════════════════════════════
 elif menu == "⚙️ Configuración":
     st.title("Configuración de empresa y plantillas")
@@ -3461,7 +3460,10 @@ elif menu == "⚙️ Configuración":
             .eq("user_id", user_id)
             .execute()
         )
-        settings = config_res.data[0] if config_res.data else {}
+        if config_res.data and len(config_res.data) > 0:
+            settings = config_res.data[0]
+        else:
+            settings = {}
     except Exception:
         settings = {}
 
@@ -3479,7 +3481,7 @@ elif menu == "⚙️ Configuración":
     budget_css = settings.get("budget_css", "")
 
     # ----------------------------------------------------
-    # SECCIÓN INDEPENDIENTE: LOGO DE LA EMPRESA
+    # SECCIÓN: LOGO DE LA EMPRESA (CON VISTA PREVIA INMEDIATA)
     # ----------------------------------------------------
     st.markdown("---")
     st.subheader("🖼️ Logo de la empresa")
@@ -3493,18 +3495,19 @@ elif menu == "⚙️ Configuración":
             key="input_logo_empresa",
         )
 
+        # VISTA PREVIA INMEDIATA AL SELECCIONAR ARCHIVO
         if archivo_logo is not None:
-            if st.button("🚀 Subir y Guardar Logo", key="btn_subir_logo_action"):
+            st.image(archivo_logo, width=200, caption="Vista previa del nuevo logo")
+            
+            if st.button("🚀 Guardar Logo", key="btn_subir_logo_action", use_container_width=True):
                 with st.spinner("Subiendo logo a Supabase..."):
                     try:
-                        ext = archivo_logo.name.split(".")[-1]
+                        ext = archivo_logo.name.split(".")[-1].lower()
                         file_path = f"logo_{user_id}.{ext}"
                         file_bytes = archivo_logo.getvalue()
 
-                        # 1. Intentar subir el archivo a Supabase Storage
-                        res_storage = supabase.storage.from_(
-                            "company-logos"
-                        ).upload(
+                        # Subir a Supabase Storage
+                        res_storage = supabase.storage.from_("company-logos").upload(
                             path=file_path,
                             file=file_bytes,
                             file_options={
@@ -3513,14 +3516,10 @@ elif menu == "⚙️ Configuración":
                             },
                         )
 
-                        # 2. Obtener la URL pública
-                        url_publica = (
-                            supabase.storage.from_("company-logos").get_public_url(
-                                file_path
-                            )
-                        )
+                        # Obtener URL pública
+                        url_publica = supabase.storage.from_("company-logos").get_public_url(file_path)
 
-                        # 3. Guardar la URL en la tabla settings
+                        # Guardar URL en settings
                         supabase.table("settings").upsert(
                             {"user_id": user_id, "company_logo": url_publica},
                             on_conflict="user_id",
@@ -3537,12 +3536,9 @@ elif menu == "⚙️ Configuración":
                         )
 
     with col_logo_prev:
-        # Previsualización inteligente:
-        # Si el usuario eligió un nuevo archivo en su PC, mostramos ESE archivo inmediatamente.
-        # De lo contrario, mostramos el logo guardado en la BD.
         if archivo_logo is not None:
-            st.markdown("**Vista previa (Nuevo archivo):**")
-            st.image(archivo_logo, width=180)
+            st.success("✅ Nuevo logo seleccionado")
+            st.caption("Pulsa '🚀 Guardar Logo' para guardarlo")
         elif company_logo:
             st.markdown("**Logo actual guardado:**")
             st.image(company_logo, width=180)
