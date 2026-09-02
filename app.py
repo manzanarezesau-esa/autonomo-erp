@@ -3481,7 +3481,7 @@ elif menu == "⚙️ Configuración":
     budget_css = settings.get("budget_css", "")
 
     # ----------------------------------------------------
-    # SECCIÓN: LOGO DE LA EMPRESA (CON VISTA PREVIA INMEDIATA)
+    # SECCIÓN: LOGO DE LA EMPRESA (CORREGIDA Y COMPLETA)
     # ----------------------------------------------------
     st.markdown("---")
     st.subheader("🖼️ Logo de la empresa")
@@ -3505,28 +3505,44 @@ elif menu == "⚙️ Configuración":
                         ext = archivo_logo.name.split(".")[-1].lower()
                         file_path = f"logo_{user_id}.{ext}"
                         file_bytes = archivo_logo.getvalue()
+                        content_type = archivo_logo.type or f"image/{ext}"
 
-                        # Subir a Supabase Storage
-                        res_storage = supabase.storage.from_("company-logos").upload(
-                            path=file_path,
-                            file=file_bytes,
-                            file_options={
-                                "content-type": archivo_logo.type,
-                                "upsert": "true",
-                            },
-                        )
+                        # 1. Intentar subir el archivo (fallback a update si ya existe)
+                        try:
+                            supabase.storage.from_("company-logos").upload(
+                                path=file_path,
+                                file=file_bytes,
+                                file_options={
+                                    "content-type": content_type,
+                                    "upsert": "true",
+                                },
+                            )
+                        except Exception:
+                            supabase.storage.from_("company-logos").update(
+                                path=file_path,
+                                file=file_bytes,
+                                file_options={"content-type": content_type},
+                            )
 
-                        # Obtener URL pública
-                        url_publica = supabase.storage.from_("company-logos").get_public_url(file_path)
+                        # 2. Obtención de URL pública limpia
+                        url_raw = supabase.storage.from_("company-logos").get_public_url(file_path)
+                        if isinstance(url_raw, dict):
+                            url_base = url_raw.get("publicUrl", url_raw.get("publicURL", ""))
+                        else:
+                            url_base = str(url_raw)
 
-                        # Guardar URL en settings
+                        # 3. Timestamp para romper la caché del navegador
+                        import time as py_time
+                        url_publica = f"{url_base}?v={int(py_time.time())}"
+
+                        # 4. Guardar URL en la tabla settings
                         supabase.table("settings").upsert(
                             {"user_id": user_id, "company_logo": url_publica},
                             on_conflict="user_id",
                         ).execute()
 
                         st.success("✅ ¡Logo guardado y actualizado con éxito!")
-                        time.sleep(1)
+                        py_time.sleep(1)
                         st.rerun()
 
                     except Exception as err:
