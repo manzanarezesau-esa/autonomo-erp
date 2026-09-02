@@ -3447,7 +3447,7 @@ elif menu == "💳 Suscripción":
     st.caption("Los pagos se procesan de forma segura a través de Stripe. Puedes cancelar en cualquier momento.")
 
 # ════════════════════════════════════════════════════════════
-# CONFIGURACIÓN (CORREGIDA - Subida de logo con vista previa)
+# CONFIGURACIÓN (CORREGIDA - Bucket 'logos')
 # ════════════════════════════════════════════════════════════
 elif menu == "⚙️ Configuración":
     st.title("Configuración de empresa y plantillas")
@@ -3481,7 +3481,7 @@ elif menu == "⚙️ Configuración":
     budget_css = settings.get("budget_css", "")
 
     # ----------------------------------------------------
-    # SECCIÓN: LOGO DE LA EMPRESA (CORREGIDA Y COMPLETA)
+    # SECCIÓN: LOGO DE LA EMPRESA (CON BUCKET 'logos')
     # ----------------------------------------------------
     st.markdown("---")
     st.subheader("🖼️ Logo de la empresa")
@@ -3507,9 +3507,9 @@ elif menu == "⚙️ Configuración":
                         file_bytes = archivo_logo.getvalue()
                         content_type = archivo_logo.type or f"image/{ext}"
 
-                        # 1. Intentar subir el archivo (fallback a update si ya existe)
+                        # 1. Intentar subir al bucket 'logos' (fallback a update si ya existe)
                         try:
-                            supabase.storage.from_("company-logos").upload(
+                            supabase.storage.from_("logos").upload(
                                 path=file_path,
                                 file=file_bytes,
                                 file_options={
@@ -3518,14 +3518,14 @@ elif menu == "⚙️ Configuración":
                                 },
                             )
                         except Exception:
-                            supabase.storage.from_("company-logos").update(
+                            supabase.storage.from_("logos").update(
                                 path=file_path,
                                 file=file_bytes,
                                 file_options={"content-type": content_type},
                             )
 
                         # 2. Obtención de URL pública limpia
-                        url_raw = supabase.storage.from_("company-logos").get_public_url(file_path)
+                        url_raw = supabase.storage.from_("logos").get_public_url(file_path)
                         if isinstance(url_raw, dict):
                             url_base = url_raw.get("publicUrl", url_raw.get("publicURL", ""))
                         else:
@@ -3548,7 +3548,7 @@ elif menu == "⚙️ Configuración":
                     except Exception as err:
                         st.error(f"❌ Error al subir el logo: {err}")
                         st.info(
-                            "💡 Comprueba que en tu panel de Supabase exista un Bucket de Storage llamado 'company-logos' marcado como 'Public'."
+                            "💡 Comprueba que en tu panel de Supabase exista un Bucket de Storage llamado 'logos' marcado como 'Public'."
                         )
 
     with col_logo_prev:
