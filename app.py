@@ -3448,20 +3448,25 @@ elif menu == "💳 Suscripción":
 
 
 # ════════════════════════════════════════════════════════════
-# CONFIGURACIÓN (CON SUBIDA DE LOGO)
+# CONFIGURACIÓN (CON SUBIDA DE LOGO FLUIDA)
 # ════════════════════════════════════════════════════════════
 elif menu == "⚙️ Configuración":
     st.title("Configuración de empresa y plantillas")
-    
+
     try:
-        config_res = supabase.table("settings").select("*").eq("user_id", user_id).execute()
+        config_res = (
+            supabase.table("settings")
+            .select("*")
+            .eq("user_id", user_id)
+            .execute()
+        )
         if config_res.data and len(config_res.data) > 0:
             settings = config_res.data[0]
         else:
             settings = {}
     except Exception:
         settings = {}
-    
+
     company_name = settings.get("company_name", "")
     tax_id = settings.get("company_tax_id", "")
     address = settings.get("company_address", "")
@@ -3475,36 +3480,101 @@ elif menu == "⚙️ Configuración":
     budget_html = settings.get("budget_html", "")
     budget_css = settings.get("budget_css", "")
 
-    # Vista previa del logo si existe
-    if company_logo:
-        st.markdown("### Logo actual")
-        st.image(company_logo, width=180)
+    # ----------------------------------------------------
+    # SECCIÓN INDEPENDIENTE: GESTIÓN Y SUBIDA DE LOGO
+    # ----------------------------------------------------
+    st.markdown("---")
+    st.subheader("🖼️ Logo de la empresa")
 
+    col_logo_preview, col_logo_upload = st.columns([1, 2])
+
+    with col_logo_preview:
+        if company_logo:
+            st.image(company_logo, caption="Logo actual", width=180)
+        else:
+            st.info("Sin logo configurado")
+
+    with col_logo_upload:
+        archivo_logo = st.file_uploader(
+            "Seleccionar nuevo logo (PNG, JPG, JPEG)",
+            type=["png", "jpg", "jpeg"],
+            key="logo_uploader",
+        )
+
+        if archivo_logo is not None:
+            if st.button("⬆️ Guardar e intentar subir Logo", key="btn_subir_logo"):
+                try:
+                    ext = archivo_logo.name.split(".")[-1]
+                    file_path = f"logo_{user_id}.{ext}"
+                    file_bytes = archivo_logo.getvalue()
+
+                    # Subida a Supabase Storage
+                    supabase.storage.from_("company-logos").upload(
+                        path=file_path,
+                        file=file_bytes,
+                        file_options={
+                            "content-type": archivo_logo.type,
+                            "upsert": "true",
+                        },
+                    )
+                    url_publica = (
+                        supabase.storage.from_("company-logos").get_public_url(
+                            file_path
+                        )
+                    )
+
+                    # Guardar la URL resultante en la base de datos
+                    supabase.table("settings").upsert(
+                        {"user_id": user_id, "company_logo": url_publica},
+                        on_conflict="user_id",
+                    ).execute()
+
+                    st.success("✅ Logo actualizado correctamente")
+                    time.sleep(1)
+                    st.rerun()
+                except Exception as logo_err:
+                    st.error(f"Error al subir el logo: {logo_err}")
+
+    # ----------------------------------------------------
+    # FORMULARIO DE DATOS FISCALES Y PLANTILLAS
+    # ----------------------------------------------------
+    st.markdown("---")
     with st.form("config_form"):
-        company_name = st.text_input("Nombre de la empresa / autónomo", value=company_name)
+        st.subheader("📋 Datos Fiscales")
+        company_name = st.text_input(
+            "Nombre de la empresa / autónomo", value=company_name
+        )
         tax_id = st.text_input("NIF/CIF", value=tax_id)
         address = st.text_area("Dirección fiscal", value=address)
         iban = st.text_input("IBAN", value=iban)
         company_phone = st.text_input("Teléfono", value=company_phone)
         company_email = st.text_input("Correo electrónico", value=company_email)
-        
-        st.markdown("---")
-        st.subheader("🖼️ Logo de la empresa")
-        archivo_logo = st.file_uploader("Subir logo de la empresa", type=["png", "jpg", "jpeg"])
-        company_logo = st.text_input("URL del logo (opcional o autogenerada)", value=company_logo)
+        company_logo_input = st.text_input(
+            "URL manual del logo (opcional)", value=company_logo
+        )
 
         st.markdown("---")
-        st.subheader("Plantilla de factura")
-        nombre_plantilla = st.text_input("Nombre de la plantilla", value=nombre_plantilla)
-        template_html = st.text_area("Código HTML (codigo_html)", value=template_html, height=300)
-        template_css = st.text_area("Código CSS (codigo_css) - opcional", value=template_css, height=100)
-        
+        st.subheader("📄 Plantilla de factura")
+        nombre_plantilla = st.text_input(
+            "Nombre de la plantilla", value=nombre_plantilla
+        )
+        template_html = st.text_area(
+            "Código HTML (codigo_html)", value=template_html, height=250
+        )
+        template_css = st.text_area(
+            "Código CSS (codigo_css) - opcional", value=template_css, height=100
+        )
+
         st.markdown("---")
-        st.subheader("Plantilla de presupuesto")
-        budget_html = st.text_area("Código HTML (budget_html)", value=budget_html, height=300)
-        budget_css = st.text_area("Código CSS (budget_css) - opcional", value=budget_css, height=100)
-        
-        if st.form_submit_button("Guardar datos fiscales"):
+        st.subheader("📄 Plantilla de presupuesto")
+        budget_html = st.text_area(
+            "Código HTML (budget_html)", value=budget_html, height=250
+        )
+        budget_css = st.text_area(
+            "Código CSS (budget_css) - opcional", value=budget_css, height=100
+        )
+
+        if st.form_submit_button("💾 Guardar datos fiscales"):
             tax_val = (tax_id or "").strip()
             if tax_val and not validar_nif_cif(tax_val):
                 st.error("El NIF/CIF no es válido.")
@@ -3513,22 +3583,6 @@ elif menu == "⚙️ Configuración":
                 if iban_val and not validar_iban(iban_val):
                     st.error("El IBAN no es válido.")
                 else:
-                    # Subida del logo a Supabase Storage si se ha adjuntado un archivo
-                    if archivo_logo is not None:
-                        try:
-                            ext = archivo_logo.name.split(".")[-1]
-                            file_path = f"logo_{user_id}.{ext}"
-                            file_bytes = archivo_logo.getvalue()
-                            
-                            supabase.storage.from_("company-logos").upload(
-                                path=file_path,
-                                file=file_bytes,
-                                file_options={"content-type": archivo_logo.type, "upsert": "true"}
-                            )
-                            company_logo = supabase.storage.from_("company-logos").get_public_url(file_path)
-                        except Exception as logo_err:
-                            st.warning(f"No se pudo subir la imagen del logo: {logo_err}")
-
                     data = {
                         "user_id": user_id,
                         "company_name": company_name.strip(),
@@ -3537,7 +3591,7 @@ elif menu == "⚙️ Configuración":
                         "company_iban": iban_val,
                         "company_phone": company_phone.strip(),
                         "company_email": company_email.strip(),
-                        "company_logo": company_logo.strip(),
+                        "company_logo": company_logo_input.strip(),
                         "nombre_plantilla": nombre_plantilla.strip(),
                         "codigo_html": template_html,
                         "codigo_css": template_css,
@@ -3545,17 +3599,22 @@ elif menu == "⚙️ Configuración":
                         "budget_css": budget_css,
                     }
                     try:
-                        supabase.table("settings").upsert(data, on_conflict="user_id").execute()
-                        st.success("Datos fiscales actualizados correctamente")
+                        supabase.table("settings").upsert(
+                            data, on_conflict="user_id"
+                        ).execute()
+                        st.success("Datos fiscales guardados correctamente")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Error: {e}")
+                        st.error(f"Error al guardar: {e}")
 
+    # ----------------------------------------------------
+    # CERTIFICADO DIGITAL
+    # ----------------------------------------------------
     st.markdown("---")
     st.subheader("🔐 Certificado Digital para Firma Electrónica")
-    
+
     tiene_cert = tiene_certificado(user_id)
-    
+
     if tiene_cert:
         st.success("✅ Tienes un certificado configurado")
         if st.button("🗑️ Eliminar certificado actual"):
@@ -3564,11 +3623,13 @@ elif menu == "⚙️ Configuración":
                 if eliminar_certificado_usuario(user_id):
                     st.success("Certificado eliminado correctamente")
                     st.rerun()
-    
+
     st.markdown("**Subir certificado (.p12 o .pfx)**")
-    archivo_cert = st.file_uploader("Archivo del certificado", type=["p12", "pfx"])
+    archivo_cert = st.file_uploader(
+        "Archivo del certificado", type=["p12", "pfx"], key="cert_uploader"
+    )
     password_cert = st.text_input("Contraseña del certificado", type="password")
-    
+
     if st.button("💾 Guardar certificado"):
         if archivo_cert is None:
             st.error("Debes subir un archivo de certificado.")
@@ -3578,12 +3639,15 @@ elif menu == "⚙️ Configuración":
             try:
                 certificado_bytes = archivo_cert.getvalue()
                 from firma_xades import cargar_certificado_p12
+
                 try:
                     cargar_certificado_p12(certificado_bytes, password_cert)
                 except Exception as e:
                     st.error(f"El certificado no es válido: {str(e)}")
                     st.stop()
-                if guardar_certificado_usuario(user_id, certificado_bytes, password_cert):
+                if guardar_certificado_usuario(
+                    user_id, certificado_bytes, password_cert
+                ):
                     st.success("Certificado guardado correctamente")
                     st.rerun()
             except Exception as e:
@@ -3591,10 +3655,52 @@ elif menu == "⚙️ Configuración":
 
     st.markdown("---")
     if st.button("Probar plantilla factura"):
-        ejemplo_invoice = {"invoice_number": "F2024-001", "date": "2024-01-15", "month": "Enero", "concept": "Desarrollo web", "base_amount": 1000.0, "vat_percentage": 21, "vat_amount": 210.0, "irpf_percentage": 0, "irpf_amount": 0.0, "total": 1210.0}
-        ejemplo_client = {"name": "Cliente Ejemplo", "tax_id": "B12345678", "address": "Calle Falsa 123"}
-        ejemplo_lineas = [{"description": "Desarrollo web", "quantity": 1, "unit_price": 1000.0, "base_amount": 1000.0, "vat_amount": 210.0, "irpf_amount": 0.0, "total": 1210.0}]
-        ejemplo_company = {"company_name": company_name, "company_tax_id": tax_id, "company_address": address, "company_iban": iban, "company_logo": company_logo, "company_phone": company_phone, "company_email": company_email, "codigo_html": template_html, "codigo_css": template_css}
-        pdf_bytes = make_invoice_pdf_from_template(ejemplo_invoice, ejemplo_client, ejemplo_company, ejemplo_lineas)
+        ejemplo_invoice = {
+            "invoice_number": "F2024-001",
+            "date": "2024-01-15",
+            "month": "Enero",
+            "concept": "Desarrollo web",
+            "base_amount": 1000.0,
+            "vat_percentage": 21,
+            "vat_amount": 210.0,
+            "irpf_percentage": 0,
+            "irpf_amount": 0.0,
+            "total": 1210.0,
+        }
+        ejemplo_client = {
+            "name": "Cliente Ejemplo",
+            "tax_id": "B12345678",
+            "address": "Calle Falsa 123",
+        }
+        ejemplo_lineas = [
+            {
+                "description": "Desarrollo web",
+                "quantity": 1,
+                "unit_price": 1000.0,
+                "base_amount": 1000.0,
+                "vat_amount": 210.0,
+                "irpf_amount": 0.0,
+                "total": 1210.0,
+            }
+        ]
+        ejemplo_company = {
+            "company_name": company_name,
+            "company_tax_id": tax_id,
+            "company_address": address,
+            "company_iban": iban,
+            "company_logo": company_logo,
+            "company_phone": company_phone,
+            "company_email": company_email,
+            "codigo_html": template_html,
+            "codigo_css": template_css,
+        }
+        pdf_bytes = make_invoice_pdf_from_template(
+            ejemplo_invoice, ejemplo_client, ejemplo_company, ejemplo_lineas
+        )
         if pdf_bytes:
-            st.download_button("Descargar factura de prueba", pdf_bytes, "prueba_factura.pdf", "application/pdf")
+            st.download_button(
+                "Descargar factura de prueba",
+                pdf_bytes,
+                "prueba_factura.pdf",
+                "application/pdf",
+            )
