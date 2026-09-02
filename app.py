@@ -3066,7 +3066,7 @@ elif menu == "🔐 Panel Admin":
         col_k2.metric("👥 Usuarios Activos", usuarios_activos)
         col_k3.metric("📄 Facturas este mes", num_facturas_mes)
     
-    # TAB USUARIOS (LEFT JOIN)
+    # TAB USUARIOS (INTERACTIVO CON SELECCIÓN)
     with tab_usuarios:
         st.subheader("👥 Gestión de Usuarios")
         try:
@@ -3138,11 +3138,33 @@ elif menu == "🔐 Panel Admin":
                     usuarios_filtrados = [u for u in usuarios if bl in (u["email"] or "").lower() or bl in (u["company_name"] or "").lower() or bl in (u["company_tax_id"] or "").lower()]
                 
                 usuarios_df = pd.DataFrame(usuarios_filtrados)
-                st.dataframe(usuarios_df[["email", "company_name", "company_tax_id", "plan", "role", "status"]], hide_index=True, use_container_width=True)
+                
+                # Tabla interactiva con selección de fila
+                event = st.dataframe(
+                    usuarios_df[["email", "company_name", "company_tax_id", "plan", "role", "status"]],
+                    column_config={
+                        "email": st.column_config.TextColumn("Correo Electrónico"),
+                        "company_name": st.column_config.TextColumn("Empresa"),
+                        "company_tax_id": st.column_config.TextColumn("CIF/NIF"),
+                        "plan": st.column_config.TextColumn("Plan"),
+                        "role": st.column_config.TextColumn("Rol"),
+                        "status": st.column_config.TextColumn("Estado")
+                    },
+                    hide_index=True,
+                    use_container_width=True,
+                    selection_mode="single-row",
+                    on_select="rerun",
+                    key="tabla_usuarios_admin"
+                )
+                
+                selected_rows = event.selection.rows if hasattr(event, "selection") and event.selection else []
                 
                 if usuarios_filtrados:
-                    email_sel = st.selectbox("Selecciona usuario", [u["email"] or u["company_name"] or str(u["id"])[:8] for u in usuarios_filtrados], key="select_usuario_admin")
-                    usuario_sel = next((u for u in usuarios_filtrados if (u["email"] or u["company_name"] or str(u["id"])[:8]) == email_sel), None)
+                    if selected_rows:
+                        selected_index = selected_rows[0]
+                        usuario_sel = usuarios_filtrados[selected_index]
+                    else:
+                        usuario_sel = usuarios_filtrados[0]
                     
                     if usuario_sel:
                         user_id_sel = usuario_sel["id"]
@@ -3181,7 +3203,7 @@ elif menu == "🔐 Panel Admin":
         except Exception as e:
             st.error(f"Error al cargar usuarios: {e}")
     
-    # TAB SUSCRIPCIONES (MAPEO EMAIL)
+    # TAB SUSCRIPCIONES
     with tab_suscripciones:
         st.subheader("💳 Control de Suscripciones")
         try:
@@ -3248,7 +3270,7 @@ elif menu == "🔐 Panel Admin":
         except Exception as e:
             st.error(f"Error al cargar suscripciones: {e}")
     
-    # TAB LOGS
+    # TAB LOGS (CON FORMATO DE FECHA Y NOMBRES LIMPIOS)
     with tab_logs:
         st.subheader("⚠️ Monitor de Logs")
         col_l1, col_l2 = st.columns(2)
@@ -3258,8 +3280,18 @@ elif menu == "🔐 Panel Admin":
                 logs_res = admin_client.table("error_logs").select("*").order("created_at", desc=True).limit(50).execute()
                 if logs_res.data:
                     logs_df = pd.DataFrame(logs_res.data)
-                    logs_df["created_at"] = pd.to_datetime(logs_df["created_at"]).dt.strftime("%d/%m/%Y %H:%M")
-                    st.dataframe(logs_df[["created_at", "user_id", "invoice_number", "error_message"]], hide_index=True, use_container_width=True)
+                    logs_df["created_at"] = pd.to_datetime(logs_df["created_at"])
+                    st.dataframe(
+                        logs_df[["created_at", "user_id", "invoice_number", "error_message"]],
+                        column_config={
+                            "created_at": st.column_config.DatetimeColumn("Fecha y Hora", format="DD/MM/YYYY - HH:mm"),
+                            "user_id": st.column_config.TextColumn("ID Usuario"),
+                            "invoice_number": st.column_config.TextColumn("Nº Factura"),
+                            "error_message": st.column_config.TextColumn("Mensaje de Error")
+                        },
+                        hide_index=True,
+                        use_container_width=True
+                    )
                 else:
                     st.info("Sin errores registrados.")
             except Exception as e:
@@ -3270,12 +3302,24 @@ elif menu == "🔐 Panel Admin":
                 audit_res = admin_client.table("admin_actions").select("*").order("created_at", desc=True).limit(50).execute()
                 if audit_res.data:
                     audit_df = pd.DataFrame(audit_res.data)
-                    audit_df["created_at"] = pd.to_datetime(audit_df["created_at"]).dt.strftime("%d/%m/%Y %H:%M")
-                    st.dataframe(audit_df[["created_at", "admin_id", "user_id", "action_type", "action_details"]], hide_index=True, use_container_width=True)
+                    audit_df["created_at"] = pd.to_datetime(audit_df["created_at"])
+                    st.dataframe(
+                        audit_df[["created_at", "admin_id", "user_id", "action_type", "action_details"]],
+                        column_config={
+                            "created_at": st.column_config.DatetimeColumn("Fecha y Hora", format="DD/MM/YYYY - HH:mm"),
+                            "admin_id": st.column_config.TextColumn("ID Admin"),
+                            "user_id": st.column_config.TextColumn("ID Usuario Afectado"),
+                            "action_type": st.column_config.TextColumn("Acción"),
+                            "action_details": st.column_config.TextColumn("Detalles")
+                        },
+                        hide_index=True,
+                        use_container_width=True
+                    )
                 else:
                     st.info("Sin acciones registradas.")
             except Exception as e:
                 st.error(f"Error al cargar admin_actions: {e}")
+
 
 # ════════════════════════════════════════════════════════════
 # SUSCRIPCIÓN (COMPLETA)
@@ -3402,13 +3446,13 @@ elif menu == "💳 Suscripción":
     st.markdown("---")
     st.caption("Los pagos se procesan de forma segura a través de Stripe. Puedes cancelar en cualquier momento.")
 
+
 # ════════════════════════════════════════════════════════════
-# CONFIGURACIÓN (CORREGIDA - sin fuga de datos)
+# CONFIGURACIÓN (CON SUBIDA DE LOGO)
 # ════════════════════════════════════════════════════════════
 elif menu == "⚙️ Configuración":
     st.title("Configuración de empresa y plantillas")
     
-    # CORRECCIÓN FUGA DE DATOS: campos vacíos para usuarios sin settings
     try:
         config_res = supabase.table("settings").select("*").eq("user_id", user_id).execute()
         if config_res.data and len(config_res.data) > 0:
@@ -3431,6 +3475,11 @@ elif menu == "⚙️ Configuración":
     budget_html = settings.get("budget_html", "")
     budget_css = settings.get("budget_css", "")
 
+    # Vista previa del logo si existe
+    if company_logo:
+        st.markdown("### Logo actual")
+        st.image(company_logo, width=180)
+
     with st.form("config_form"):
         company_name = st.text_input("Nombre de la empresa / autónomo", value=company_name)
         tax_id = st.text_input("NIF/CIF", value=tax_id)
@@ -3438,16 +3487,23 @@ elif menu == "⚙️ Configuración":
         iban = st.text_input("IBAN", value=iban)
         company_phone = st.text_input("Teléfono", value=company_phone)
         company_email = st.text_input("Correo electrónico", value=company_email)
-        company_logo = st.text_input("URL del logo (opcional)", value=company_logo)
+        
+        st.markdown("---")
+        st.subheader("🖼️ Logo de la empresa")
+        archivo_logo = st.file_uploader("Subir logo de la empresa", type=["png", "jpg", "jpeg"])
+        company_logo = st.text_input("URL del logo (opcional o autogenerada)", value=company_logo)
+
         st.markdown("---")
         st.subheader("Plantilla de factura")
         nombre_plantilla = st.text_input("Nombre de la plantilla", value=nombre_plantilla)
         template_html = st.text_area("Código HTML (codigo_html)", value=template_html, height=300)
         template_css = st.text_area("Código CSS (codigo_css) - opcional", value=template_css, height=100)
+        
         st.markdown("---")
         st.subheader("Plantilla de presupuesto")
         budget_html = st.text_area("Código HTML (budget_html)", value=budget_html, height=300)
         budget_css = st.text_area("Código CSS (budget_css) - opcional", value=budget_css, height=100)
+        
         if st.form_submit_button("Guardar datos fiscales"):
             tax_val = (tax_id or "").strip()
             if tax_val and not validar_nif_cif(tax_val):
@@ -3457,13 +3513,36 @@ elif menu == "⚙️ Configuración":
                 if iban_val and not validar_iban(iban_val):
                     st.error("El IBAN no es válido.")
                 else:
+                    # Subida del logo a Supabase Storage si se ha adjuntado un archivo
+                    if archivo_logo is not None:
+                        try:
+                            ext = archivo_logo.name.split(".")[-1]
+                            file_path = f"logo_{user_id}.{ext}"
+                            file_bytes = archivo_logo.getvalue()
+                            
+                            supabase.storage.from_("company-logos").upload(
+                                path=file_path,
+                                file=file_bytes,
+                                file_options={"content-type": archivo_logo.type, "upsert": "true"}
+                            )
+                            company_logo = supabase.storage.from_("company-logos").get_public_url(file_path)
+                        except Exception as logo_err:
+                            st.warning(f"No se pudo subir la imagen del logo: {logo_err}")
+
                     data = {
-                        "user_id": user_id, "company_name": company_name.strip(),
-                        "company_tax_id": tax_val, "company_address": address.strip(),
-                        "company_iban": iban_val, "company_phone": company_phone.strip(),
-                        "company_email": company_email.strip(), "company_logo": company_logo.strip(),
-                        "nombre_plantilla": nombre_plantilla.strip(), "codigo_html": template_html,
-                        "codigo_css": template_css, "budget_html": budget_html, "budget_css": budget_css,
+                        "user_id": user_id,
+                        "company_name": company_name.strip(),
+                        "company_tax_id": tax_val,
+                        "company_address": address.strip(),
+                        "company_iban": iban_val,
+                        "company_phone": company_phone.strip(),
+                        "company_email": company_email.strip(),
+                        "company_logo": company_logo.strip(),
+                        "nombre_plantilla": nombre_plantilla.strip(),
+                        "codigo_html": template_html,
+                        "codigo_css": template_css,
+                        "budget_html": budget_html,
+                        "budget_css": budget_css,
                     }
                     try:
                         supabase.table("settings").upsert(data, on_conflict="user_id").execute()
