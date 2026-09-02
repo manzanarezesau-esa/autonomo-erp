@@ -3448,11 +3448,12 @@ elif menu == "💳 Suscripción":
 
 
 # ════════════════════════════════════════════════════════════
-# CONFIGURACIÓN (CON SUBIDA DE LOGO FLUIDA)
+# CONFIGURACIÓN (CON SUBIDA DE LOGO EN TIEMPO REAL)
 # ════════════════════════════════════════════════════════════
 elif menu == "⚙️ Configuración":
     st.title("Configuración de empresa y plantillas")
 
+    # Cargar configuración existente de la BD
     try:
         config_res = (
             supabase.table("settings")
@@ -3460,10 +3461,7 @@ elif menu == "⚙️ Configuración":
             .eq("user_id", user_id)
             .execute()
         )
-        if config_res.data and len(config_res.data) > 0:
-            settings = config_res.data[0]
-        else:
-            settings = {}
+        settings = config_res.data[0] if config_res.data else {}
     except Exception:
         settings = {}
 
@@ -3481,59 +3479,75 @@ elif menu == "⚙️ Configuración":
     budget_css = settings.get("budget_css", "")
 
     # ----------------------------------------------------
-    # SECCIÓN INDEPENDIENTE: GESTIÓN Y SUBIDA DE LOGO
+    # SECCIÓN INDEPENDIENTE: LOGO DE LA EMPRESA
     # ----------------------------------------------------
     st.markdown("---")
     st.subheader("🖼️ Logo de la empresa")
 
-    col_logo_preview, col_logo_upload = st.columns([1, 2])
+    col_logo_up, col_logo_prev = st.columns([2, 1])
 
-    with col_logo_preview:
-        if company_logo:
-            st.image(company_logo, caption="Logo actual", width=180)
-        else:
-            st.info("Sin logo configurado")
-
-    with col_logo_upload:
+    with col_logo_up:
         archivo_logo = st.file_uploader(
-            "Seleccionar nuevo logo (PNG, JPG, JPEG)",
+            "Seleccionar imagen para el logo (PNG, JPG, JPEG)",
             type=["png", "jpg", "jpeg"],
-            key="logo_uploader",
+            key="input_logo_empresa",
         )
 
         if archivo_logo is not None:
-            if st.button("⬆️ Guardar e intentar subir Logo", key="btn_subir_logo"):
-                try:
-                    ext = archivo_logo.name.split(".")[-1]
-                    file_path = f"logo_{user_id}.{ext}"
-                    file_bytes = archivo_logo.getvalue()
+            if st.button("🚀 Subir y Guardar Logo", key="btn_subir_logo_action"):
+                with st.spinner("Subiendo logo a Supabase..."):
+                    try:
+                        ext = archivo_logo.name.split(".")[-1]
+                        file_path = f"logo_{user_id}.{ext}"
+                        file_bytes = archivo_logo.getvalue()
 
-                    # Subida a Supabase Storage
-                    supabase.storage.from_("company-logos").upload(
-                        path=file_path,
-                        file=file_bytes,
-                        file_options={
-                            "content-type": archivo_logo.type,
-                            "upsert": "true",
-                        },
-                    )
-                    url_publica = (
-                        supabase.storage.from_("company-logos").get_public_url(
-                            file_path
+                        # 1. Intentar subir el archivo a Supabase Storage
+                        res_storage = supabase.storage.from_(
+                            "company-logos"
+                        ).upload(
+                            path=file_path,
+                            file=file_bytes,
+                            file_options={
+                                "content-type": archivo_logo.type,
+                                "upsert": "true",
+                            },
                         )
-                    )
 
-                    # Guardar la URL resultante en la base de datos
-                    supabase.table("settings").upsert(
-                        {"user_id": user_id, "company_logo": url_publica},
-                        on_conflict="user_id",
-                    ).execute()
+                        # 2. Obtener la URL pública
+                        url_publica = (
+                            supabase.storage.from_("company-logos").get_public_url(
+                                file_path
+                            )
+                        )
 
-                    st.success("✅ Logo actualizado correctamente")
-                    time.sleep(1)
-                    st.rerun()
-                except Exception as logo_err:
-                    st.error(f"Error al subir el logo: {logo_err}")
+                        # 3. Guardar la URL en la tabla settings
+                        supabase.table("settings").upsert(
+                            {"user_id": user_id, "company_logo": url_publica},
+                            on_conflict="user_id",
+                        ).execute()
+
+                        st.success("✅ ¡Logo guardado y actualizado con éxito!")
+                        time.sleep(1)
+                        st.rerun()
+
+                    except Exception as err:
+                        st.error(f"❌ Error al subir el logo: {err}")
+                        st.info(
+                            "💡 Comprueba que en tu panel de Supabase exista un Bucket de Storage llamado 'company-logos' marcado como 'Public'."
+                        )
+
+    with col_logo_prev:
+        # Previsualización inteligente:
+        # Si el usuario eligió un nuevo archivo en su PC, mostramos ESE archivo inmediatamente.
+        # De lo contrario, mostramos el logo guardado en la BD.
+        if archivo_logo is not None:
+            st.markdown("**Vista previa (Nuevo archivo):**")
+            st.image(archivo_logo, width=180)
+        elif company_logo:
+            st.markdown("**Logo actual guardado:**")
+            st.image(company_logo, width=180)
+        else:
+            st.info("Sin logo configurado")
 
     # ----------------------------------------------------
     # FORMULARIO DE DATOS FISCALES Y PLANTILLAS
@@ -3704,3 +3718,4 @@ elif menu == "⚙️ Configuración":
                 "prueba_factura.pdf",
                 "application/pdf",
             )
+
