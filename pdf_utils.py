@@ -874,4 +874,58 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
     story.append(lines_table)
     story.append(Spacer(1, 10))
 
-    vat_pct_display =
+    vat_pct_display = vat_pct or 0
+    totals_width = PRINTABLE_WIDTH * 0.40
+    totals_left_offset = PRINTABLE_WIDTH - totals_width
+
+    totals_data = [
+        [Paragraph('Base imponible:', total_label_style), Paragraph(_fmt_money(base_total), total_value_style)],
+        [Paragraph(f'IVA ({vat_pct_display:.1f}%):', total_label_style), Paragraph(_fmt_money(vat_total), total_value_style)],
+    ]
+
+    irpf_total = sum(l.get('irpf_amount', 0) for l in lineas)
+    if irpf_total > 0:
+        irpf_pct = lineas[0].get('irpf_percentage', 0) if lineas else 0
+        totals_data.append([
+            Paragraph(f'IRPF ({irpf_pct:.1f}%):', total_label_style),
+            Paragraph(f'-{_fmt_money(irpf_total)}', total_value_style)
+        ])
+
+    totals_data.append([
+        Paragraph('<b>TOTAL:</b>', total_final_style),
+        Paragraph(f'<b>{_fmt_money(total)}</b>', total_final_style),
+    ])
+
+    totals_table = Table(totals_data, colWidths=[totals_width * 0.45, totals_width * 0.55])
+    totals_table.setStyle(TableStyle([
+        ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+        ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ('LEFTPADDING', (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('LINEABOVE', (0, -1), (-1, -1), 1, colors.HexColor('#1E3A8A')),
+    ]))
+
+    totals_wrapper = Table([['', totals_table]], colWidths=[totals_left_offset, totals_width])
+    totals_wrapper.setStyle(TableStyle([
+        ('LEFTPADDING', (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('TOPPADDING', (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+    ]))
+
+    story.append(totals_wrapper)
+    story.append(Spacer(1, 15))
+
+    story.append(Paragraph(
+        "Presupuesto válido por 30 días · Gracias por confiar en nosotros",
+        footer_style
+    ))
+
+    doc.build(story)
+    pdf_bytes = buffer.getvalue()
+    buffer.close()
+
+    return pdf_bytes
