@@ -845,7 +845,7 @@ elif menu == "📦 Productos":
     else:
         st.info("No hay productos en el catálogo.")
 # ════════════════════════════════════════════════════════════
-# VENTAS
+# VENTAS (Con vista previa y líneas dinámicas)
 # ════════════════════════════════════════════════════════════
 elif menu == "💰 Ventas":
     st.title("Facturas de Venta")
@@ -875,88 +875,273 @@ elif menu == "💰 Ventas":
     if clientes_df.empty:
         st.warning("Primero registra algún cliente.")
     else:
+        # ============================================================
+        # NUEVA FACTURA CON VISTA PREVIA
+        # ============================================================
         if not st.session_state.modo_edicion_factura and not st.session_state.modo_rectificativa:
             st.subheader("Nueva factura")
-            with st.form("add_invoice", clear_on_submit=True):
+            
+            # CABECERA DE LA FACTURA
+            col_cab1, col_cab2 = st.columns([2, 1])
+            with col_cab1:
                 num_auto = obtener_siguiente_numero_factura(user_id)
-                num = st.text_input("Nº Factura", value=num_auto)
-                fecha = st.date_input("Fecha", datetime.now())
-                mes = LISTA_MESES[fecha.month - 1]
-                st.caption(f"📅 Mes: **{mes}**")
-
-                cli_nombre = st.selectbox("Cliente", clientes_df["name"].tolist())
-                cliente_row = clientes_df[clientes_df["name"] == cli_nombre].iloc[0]
-                tipo_cliente = cliente_row.get("type", "b2b")
-                st.markdown("**Líneas de factura**")
-                num_lineas = st.number_input("Número de líneas", min_value=1, max_value=20, value=1, step=1)
-                lineas = []
-                lista_productos = ["-- Manual --"]
-                if not productos_df.empty and "name" in productos_df.columns:
-                    lista_productos += productos_df["name"].tolist()
-                for i in range(int(num_lineas)):
-                    cols = st.columns([3,2,2,2])
-                    with cols[0]:
-                        prod_sel = st.selectbox(f"Producto {i+1}", lista_productos, key=f"prod_{i}")
-                        if prod_sel == "-- Manual --":
-                            desc_manual = st.text_input(f"Descripción {i+1}", value="", key=f"desc_{i}")
-                        else:
-                            desc_manual = prod_sel
-                    with cols[1]:
-                        cantidad = st.number_input(f"Cantidad {i+1}", min_value=1.0, value=1.0, step=1.0, key=f"cant_{i}")
-                    with cols[2]:
-                        if prod_sel != "-- Manual --" and not productos_df.empty:
-                            prod_row = productos_df[productos_df["name"] == prod_sel]
-                            if not prod_row.empty:
-                                prod_row = prod_row.iloc[0]
-                                precio = prod_row["price"]
-                                vat = prod_row["default_vat_percentage"]
-                                irpf = 0.0
-                                st.text(f"Precio: {money(precio)}")
-                            else:
-                                precio = st.number_input(f"Precio {i+1}", min_value=0.0, value=0.0, step=10.0, key=f"prec_{i}")
-                                vat = st.number_input(f"IVA {i+1} (%)", value=21.0, step=1.0, key=f"vat_{i}")
-                                irpf = st.number_input(f"IRPF {i+1} (%)", value=0.0, step=1.0, key=f"irpf_{i}")
-                        else:
-                            precio = st.number_input(f"Precio {i+1}", min_value=0.0, value=0.0, step=10.0, key=f"prec_{i}")
-                            vat = st.number_input(f"IVA {i+1} (%)", value=21.0, step=1.0, key=f"vat_{i}")
-                            irpf = st.number_input(f"IRPF {i+1} (%)", value=0.0, step=1.0, key=f"irpf_{i}")
-                    with cols[3]:
-                        base_linea = cantidad * precio
-                        vat_amount = base_linea * vat / 100
-                        irpf_amount = base_linea * irpf / 100
-                        total_linea = base_linea + vat_amount - irpf_amount
-                        st.text(f"Total: {money(total_linea)}")
-                    descripcion_linea = desc_manual if prod_sel == "-- Manual --" and desc_manual.strip() else (prod_sel if prod_sel != "-- Manual --" else f"Concepto manual {i+1}")
-                    prod_id = None
+                num = st.text_input("Nº Factura", value=num_auto, key="new_inv_num")
+            with col_cab2:
+                fecha = st.date_input("Fecha", datetime.now(), key="new_inv_fecha")
+            
+            mes = LISTA_MESES[fecha.month - 1]
+            st.caption(f"📅 Mes: **{mes}**")
+            
+            cli_nombre = st.selectbox("Cliente", clientes_df["name"].tolist(), key="new_inv_cliente")
+            cliente_row = clientes_df[clientes_df["name"] == cli_nombre].iloc[0]
+            tipo_cliente = cliente_row.get("type", "b2b")
+            
+            st.markdown("---")
+            st.markdown("**Líneas de factura**")
+            
+            # SELECTOR DE NÚMERO DE LÍNEAS (FUERA DEL FORM)
+            num_lineas = st.number_input(
+                "Número de líneas",
+                min_value=1,
+                max_value=20,
+                value=1,
+                step=1,
+                key="new_inv_num_lineas"
+            )
+            
+            # LÍNEAS DINÁMICAS
+            lineas = []
+            lista_productos = ["-- Manual --"]
+            if not productos_df.empty and "name" in productos_df.columns:
+                lista_productos += productos_df["name"].tolist()
+            
+            for i in range(int(num_lineas)):
+                st.markdown(f"**Línea {i+1}**")
+                cols = st.columns([3, 2, 2, 2])
+                
+                with cols[0]:
+                    prod_sel = st.selectbox(
+                        f"Producto {i+1}",
+                        lista_productos,
+                        key=f"new_inv_prod_{i}"
+                    )
+                    if prod_sel == "-- Manual --":
+                        desc_manual = st.text_area(
+                            f"Descripción {i+1}",
+                            value="",
+                            key=f"new_inv_desc_{i}",
+                            height=100
+                        )
+                    else:
+                        desc_manual = prod_sel
+                
+                with cols[1]:
+                    cantidad = st.number_input(
+                        f"Cantidad {i+1}",
+                        min_value=1.0,
+                        value=1.0,
+                        step=1.0,
+                        key=f"new_inv_cant_{i}"
+                    )
+                
+                with cols[2]:
                     if prod_sel != "-- Manual --" and not productos_df.empty:
-                        matching = productos_df[productos_df["name"] == prod_sel]
-                        if not matching.empty:
-                            prod_id = matching.iloc[0]["id"]
-                    lineas.append({
-                        "product_id": prod_id,
-                        "description": descripcion_linea,
-                        "quantity": cantidad,
-                        "unit_price": precio,
-                        "base_amount": base_linea,
-                        "vat_percentage": vat,
-                        "vat_amount": vat_amount,
-                        "irpf_percentage": irpf,
-                        "irpf_amount": irpf_amount,
-                        "total": total_linea
-                    })
-                base_total = sum(l["base_amount"] for l in lineas)
-                vat_total = sum(l["vat_amount"] for l in lineas)
-                irpf_total = sum(l["irpf_amount"] for l in lineas)
-                total_factura = base_total + vat_total - irpf_total
-                st.write(f"Base imponible: {money(base_total)} | IVA: {money(vat_total)} | IRPF: -{money(irpf_total)} | TOTAL: {money(total_factura)}")
-                if st.form_submit_button("Guardar factura") and num:
+                        prod_row = productos_df[productos_df["name"] == prod_sel]
+                        if not prod_row.empty:
+                            prod_row = prod_row.iloc[0]
+                            precio = prod_row["price"]
+                            vat = prod_row["default_vat_percentage"]
+                            irpf = 0.0
+                            st.text(f"Precio: {money(precio)}")
+                            st.caption(f"IVA: {vat}% | IRPF: {irpf}%")
+                        else:
+                            precio = st.number_input(f"Precio {i+1}", min_value=0.0, value=0.0, step=10.0, key=f"new_inv_prec_{i}")
+                            vat = st.number_input(f"IVA {i+1} (%)", value=21.0, step=1.0, key=f"new_inv_vat_{i}")
+                            irpf = st.number_input(f"IRPF {i+1} (%)", value=0.0, step=1.0, key=f"new_inv_irpf_{i}")
+                    else:
+                        precio = st.number_input(f"Precio {i+1}", min_value=0.0, value=0.0, step=10.0, key=f"new_inv_prec_{i}")
+                        vat = st.number_input(f"IVA {i+1} (%)", value=21.0, step=1.0, key=f"new_inv_vat_{i}")
+                        irpf = st.number_input(f"IRPF {i+1} (%)", value=0.0, step=1.0, key=f"new_inv_irpf_{i}")
+                
+                with cols[3]:
+                    base_linea = cantidad * precio
+                    vat_amount = base_linea * vat / 100
+                    irpf_amount = base_linea * irpf / 100
+                    total_linea = base_linea + vat_amount - irpf_amount
+                    st.text(f"Total: {money(total_linea)}")
+                
+                descripcion_linea = (
+                    desc_manual if prod_sel == "-- Manual --" and desc_manual.strip()
+                    else (prod_sel if prod_sel != "-- Manual --" else f"Concepto manual {i+1}")
+                )
+                
+                prod_id = None
+                if prod_sel != "-- Manual --" and not productos_df.empty:
+                    matching = productos_df[productos_df["name"] == prod_sel]
+                    if not matching.empty:
+                        prod_id = matching.iloc[0]["id"]
+                
+                lineas.append({
+                    "product_id": prod_id,
+                    "description": descripcion_linea,
+                    "quantity": cantidad,
+                    "unit_price": precio,
+                    "base_amount": base_linea,
+                    "vat_percentage": vat,
+                    "vat_amount": vat_amount,
+                    "irpf_percentage": irpf,
+                    "irpf_amount": irpf_amount,
+                    "total": total_linea
+                })
+            
+            # TOTALES
+            base_total = sum(l["base_amount"] for l in lineas)
+            vat_total = sum(l["vat_amount"] for l in lineas)
+            irpf_total = sum(l["irpf_amount"] for l in lineas)
+            total_factura = base_total + vat_total - irpf_total
+            
+            st.markdown("---")
+            col_tot1, col_tot2, col_tot3, col_tot4 = st.columns(4)
+            col_tot1.metric("Base imponible", money(base_total))
+            col_tot2.metric("IVA", money(vat_total))
+            col_tot3.metric("IRPF", f"-{money(irpf_total)}")
+            col_tot4.metric("TOTAL", money(total_factura))
+            
+            # ============================================================
+            # VISTA PREVIA DE LA FACTURA
+            # ============================================================
+            st.markdown("---")
+            st.subheader("🔍 Vista previa de la factura")
+            
+            try:
+                config_res = supabase.table("settings").select("*").eq("user_id", user_id).execute()
+                if config_res.data and len(config_res.data) > 0:
+                    empresa_preview = config_res.data[0]
+                else:
+                    empresa_preview = {
+                        "company_name": "", "company_tax_id": "",
+                        "company_address": "", "company_iban": "",
+                        "company_phone": "", "company_email": "", "company_logo": ""
+                    }
+            except Exception:
+                empresa_preview = {
+                    "company_name": "", "company_tax_id": "",
+                    "company_address": "", "company_iban": "",
+                    "company_phone": "", "company_email": "", "company_logo": ""
+                }
+            
+            cliente_preview = {
+                "name": cliente_row["name"],
+                "tax_id": cliente_row.get("tax_id", ""),
+                "address": cliente_row.get("address", "")
+            }
+            
+            with st.container(border=True):
+                # Cabecera con logo y datos de empresa
+                col_preview_logo, col_preview_company = st.columns([1, 2])
+                
+                with col_preview_logo:
+                    logo_preview = empresa_preview.get("company_logo", "")
+                    if logo_preview:
+                        st.image(logo_preview, width=150)
+                    else:
+                        st.markdown("""
+                        <div style="background-color:#1E3A8A;width:120px;height:60px;border-radius:5px;display:flex;align-items:center;justify-content:center;">
+                            <span style="color:white;font-size:20px;font-weight:bold;">LOGO</span>
+                        </div>
+                        """, unsafe_allow_html=True)
+                
+                with col_preview_company:
+                    st.markdown(f"### {empresa_preview.get('company_name', '[Nombre de la empresa]')}")
+                    st.caption(f"NIF: {empresa_preview.get('company_tax_id', '[NIF]')}")
+                    st.caption(f"{empresa_preview.get('company_address', '[Dirección]')}")
+                    if empresa_preview.get('company_phone') or empresa_preview.get('company_email'):
+                        st.caption(f"Tel: {empresa_preview.get('company_phone', '')} | Email: {empresa_preview.get('company_email', '')}")
+                
+                st.markdown("---")
+                
+                # Título FACTURA y datos
+                col_preview_title, col_preview_meta = st.columns([2, 1])
+                
+                with col_preview_title:
+                    st.markdown(f"# FACTURA")
+                    st.markdown(f"**Nº:** {num}")
+                
+                with col_preview_meta:
+                    st.markdown(f"**Fecha:** {fecha.strftime('%d/%m/%Y')}")
+                    st.markdown(f"**Periodo:** {mes}")
+                    st.markdown(f"**Estado:** Pendiente")
+                
+                st.markdown("---")
+                
+                # Datos del cliente
+                st.markdown("**DATOS DEL CLIENTE**")
+                st.markdown(f"**{cliente_preview['name']}**")
+                st.caption(f"NIF: {cliente_preview['tax_id']}")
+                st.caption(f"{cliente_preview['address']}")
+                
+                st.markdown("---")
+                
+                # Tabla de líneas
+                if lineas:
+                    lineas_preview_data = []
+                    for l in lineas:
+                        lineas_preview_data.append({
+                            "Concepto": l["description"],
+                            "Cant.": f"{float(l['quantity']):.0f}",
+                            "Precio ud.": money(l["unit_price"]),
+                            "Base imp.": money(l["base_amount"]),
+                            f"IVA ({l['vat_percentage']:.0f}%)": money(l["vat_amount"]),
+                            f"IRPF ({l['irpf_percentage']:.0f}%)": f"-{money(l['irpf_amount'])}",
+                            "Total": money(l["total"])
+                        })
+                    
+                    df_preview = pd.DataFrame(lineas_preview_data)
+                    st.dataframe(
+                        df_preview,
+                        hide_index=True,
+                        use_container_width=True
+                    )
+                
+                st.markdown("---")
+                
+                # Totales
+                col_preview_tot_left, col_preview_tot_right = st.columns([2, 1])
+                
+                with col_preview_tot_right:
+                    st.markdown("### Resumen")
+                    st.markdown(f"**Base imponible:** {money(base_total)}")
+                    if lineas:
+                        vat_pct_display = lineas[0]['vat_percentage']
+                        irpf_pct_display = lineas[0]['irpf_percentage']
+                        st.markdown(f"**IVA ({vat_pct_display:.0f}%):** {money(vat_total)}")
+                        if irpf_total > 0:
+                            st.markdown(f"**IRPF ({irpf_pct_display:.0f}%):** -{money(irpf_total)}")
+                    st.markdown("---")
+                    st.markdown(f"## **TOTAL: {money(total_factura)}**")
+                
+                st.markdown("---")
+                
+                # Información de pago
+                st.markdown(f"**Forma de pago:** Transferencia bancaria")
+                if empresa_preview.get("company_iban"):
+                    st.markdown(f"**IBAN:** {empresa_preview.get('company_iban')}")
+                
+                st.markdown("---")
+                st.caption("Sistema de facturación verificable / VERI*FACTU - Factura verificable en la sede electrónica de la AEAT")
+            
+            st.markdown("---")
+            
+            # BOTÓN GUARDAR
+            if st.button("💾 Guardar factura", key="btn_guardar_factura", use_container_width=True):
+                if num and cliente_row is not None:
                     inv_data = {
                         "user_id": user_id,
                         "invoice_number": num.strip(),
                         "date": str(fecha),
                         "month": mes,
                         "client_id": cliente_row["id"],
-                        "concept": lineas[0]["description"] if len(lineas)==1 else "Varios conceptos",
+                        "concept": lineas[0]["description"] if len(lineas) == 1 else "Varios conceptos",
                         "base_amount": base_total,
                         "vat_percentage": lineas[0]["vat_percentage"] if lineas else 21,
                         "irpf_percentage": lineas[0]["irpf_percentage"] if lineas else 0,
@@ -973,115 +1158,151 @@ elif menu == "💰 Ventas":
                     if exito:
                         st.toast("✅ Factura creada correctamente", icon="✅")
                         st.success(mensaje)
+                        for key in list(st.session_state.keys()):
+                            if key.startswith("new_inv_"):
+                                del st.session_state[key]
                         get_invoices.clear()
                         time.sleep(0.5)
                         st.rerun()
                     else:
                         st.error(mensaje)
+                else:
+                    st.error("Falta el número de factura.")
+
+        # ============================================================
+        # FACTURA RECTIFICATIVA
+        # ============================================================
         elif st.session_state.modo_rectificativa:
             st.warning("📝 Emitiendo factura rectificativa")
             original = st.session_state.rectificativa_original
             st.write(f"Factura original: **{original['invoice_number']}** de fecha {original['date']}")
-            with st.form("rectificativa_form", clear_on_submit=True):
-                num_auto = obtener_siguiente_numero_factura(user_id)
-                num = st.text_input("Nº Factura (nuevo)", value=num_auto)
-                fecha = st.date_input("Fecha", datetime.now())
-                mes = LISTA_MESES[fecha.month - 1]
-                st.caption(f"📅 Mes: **{mes}**")
-                cliente_row = clientes_df[clientes_df["id"] == original["client_id"]].iloc[0]
-                st.text(f"Cliente: {cliente_row['name']}")
-                tipo_cliente = cliente_row.get("type", "b2b")
-                st.markdown("**Líneas de la rectificativa**")
-                lineas_original = st.session_state.rectificativa_lineas.copy()
-                num_lineas = st.number_input("Número de líneas", min_value=1, max_value=20, value=len(lineas_original), step=1)
-                lineas = []
-                for i in range(int(num_lineas)):
-                    cols = st.columns([3,2,2,2])
-                    if i < len(lineas_original):
-                        lin = lineas_original[i]
-                        desc_val = lin["description"]
-                        cant_val = float(lin["quantity"])
-                        precio_val = float(lin["unit_price"])
-                        vat_val = float(lin.get("vat_percentage", 21))
-                        irpf_val = float(lin.get("irpf_percentage", 0))
-                    else:
-                        desc_val = ""
-                        cant_val = 1.0
-                        precio_val = 0.0
-                        vat_val = 21.0
-                        irpf_val = 0.0
-                    with cols[0]:
-                        desc = st.text_input(f"Descripción {i+1}", value=desc_val, key=f"r_desc_{i}")
-                    with cols[1]:
-                        cantidad = st.number_input(f"Cantidad {i+1}", min_value=1.0, value=cant_val, step=1.0, key=f"r_cant_{i}")
-                    with cols[2]:
-                        precio = st.number_input(f"Precio ud. {i+1}", min_value=0.0, value=precio_val, step=10.0, key=f"r_prec_{i}")
-                        vat = st.number_input(f"IVA {i+1} (%)", value=vat_val, step=1.0, key=f"r_vat_{i}")
-                        irpf = st.number_input(f"IRPF {i+1} (%)", value=irpf_val, step=1.0, key=f"r_irpf_{i}")
-                    with cols[3]:
-                        base_linea = cantidad * precio
-                        vat_amount = base_linea * vat / 100
-                        irpf_amount = base_linea * irpf / 100
-                        total_linea = base_linea + vat_amount - irpf_amount
-                        st.text(f"Total: {money(total_linea)}")
-                    lineas.append({
-                        "product_id": lin.get("product_id") if i < len(lineas_original) else None,
-                        "description": desc,
-                        "quantity": cantidad,
-                        "unit_price": precio,
-                        "base_amount": base_linea,
-                        "vat_percentage": vat,
-                        "vat_amount": vat_amount,
-                        "irpf_percentage": irpf,
-                        "irpf_amount": irpf_amount,
-                        "total": total_linea
-                    })
-                base_total = sum(l["base_amount"] for l in lineas)
-                vat_total = sum(l["vat_amount"] for l in lineas)
-                irpf_total = sum(l["irpf_amount"] for l in lineas)
-                total_factura = base_total + vat_total - irpf_total
-                st.write(f"Base imponible: {money(base_total)} | IVA: {money(vat_total)} | IRPF: -{money(irpf_total)} | TOTAL: {money(total_factura)}")
-                if st.form_submit_button("Guardar rectificativa") and num:
-                    inv_data = {
-                        "user_id": user_id,
-                        "invoice_number": num.strip(),
-                        "date": str(fecha),
-                        "month": mes,
-                        "client_id": cliente_row["id"],
-                        "concept": lineas[0]["description"] if len(lineas)==1 else "Varios conceptos",
-                        "base_amount": base_total,
-                        "vat_percentage": lineas[0]["vat_percentage"] if lineas else 21,
-                        "irpf_percentage": lineas[0]["irpf_percentage"] if lineas else 0,
-                        "vat_amount": vat_total,
-                        "irpf_amount": irpf_total,
-                        "total": total_factura,
-                        "status": "pendiente",
-                        "tipo": "rectificativa",
-                        "id_factura_original": original["id"]
-                    }
-                    with st.spinner("Guardando factura rectificativa..."):
-                        exito, invoice_id, mensaje = crear_factura_con_rollback(
-                            inv_data, lineas, user_id, cliente_row["name"]
-                        )
-                    if exito:
-                        try:
-                            supabase.table("invoices_v2").update({"status": "rectificada"}).eq("id", original["id"]).execute()
-                            auditar_factura(original["id"], "rectificada", inv_data.get("hash", ""), user_id)
-                        except Exception as e:
-                            st.error(f"Error al marcar factura original como rectificada: {e}")
-                        st.toast("✅ Factura rectificativa creada", icon="✅")
-                        st.success(mensaje)
-                        st.session_state.modo_rectificativa = False
-                        get_invoices.clear()
-                        time.sleep(0.5)
-                        st.rerun()
-                    else:
-                        st.error(mensaje)
-                if st.form_submit_button("Cancelar"):
+            
+            num_auto = obtener_siguiente_numero_factura(user_id)
+            num = st.text_input("Nº Factura (nuevo)", value=num_auto, key="rect_num")
+            fecha = st.date_input("Fecha", datetime.now(), key="rect_fecha")
+            mes = LISTA_MESES[fecha.month - 1]
+            st.caption(f"📅 Mes: **{mes}**")
+            
+            cliente_row = clientes_df[clientes_df["id"] == original["client_id"]].iloc[0]
+            st.text(f"Cliente: {cliente_row['name']}")
+            
+            st.markdown("**Líneas de la rectificativa**")
+            lineas_original = st.session_state.rectificativa_lineas.copy()
+            num_lineas_rect = st.number_input(
+                "Número de líneas",
+                min_value=1,
+                max_value=20,
+                value=len(lineas_original),
+                step=1,
+                key="rect_num_lineas"
+            )
+            
+            lineas_rect = []
+            for i in range(int(num_lineas_rect)):
+                if i < len(lineas_original):
+                    lin = lineas_original[i]
+                    desc_val = lin["description"]
+                    cant_val = float(lin["quantity"])
+                    precio_val = float(lin["unit_price"])
+                    vat_val = float(lin.get("vat_percentage", 21))
+                    irpf_val = float(lin.get("irpf_percentage", 0))
+                else:
+                    desc_val = ""
+                    cant_val = 1.0
+                    precio_val = 0.0
+                    vat_val = 21.0
+                    irpf_val = 0.0
+                
+                cols = st.columns([3, 2, 2, 2])
+                with cols[0]:
+                    desc = st.text_area(f"Descripción {i+1}", value=desc_val, key=f"rect_desc_{i}", height=100)
+                with cols[1]:
+                    cantidad = st.number_input(f"Cantidad {i+1}", min_value=1.0, value=cant_val, step=1.0, key=f"rect_cant_{i}")
+                with cols[2]:
+                    precio = st.number_input(f"Precio ud. {i+1}", min_value=0.0, value=precio_val, step=10.0, key=f"rect_prec_{i}")
+                    vat = st.number_input(f"IVA {i+1} (%)", value=vat_val, step=1.0, key=f"rect_vat_{i}")
+                    irpf = st.number_input(f"IRPF {i+1} (%)", value=irpf_val, step=1.0, key=f"rect_irpf_{i}")
+                with cols[3]:
+                    base_linea = cantidad * precio
+                    vat_amount = base_linea * vat / 100
+                    irpf_amount = base_linea * irpf / 100
+                    total_linea = base_linea + vat_amount - irpf_amount
+                    st.text(f"Total: {money(total_linea)}")
+                
+                lineas_rect.append({
+                    "product_id": lin.get("product_id") if i < len(lineas_original) else None,
+                    "description": desc,
+                    "quantity": cantidad,
+                    "unit_price": precio,
+                    "base_amount": base_linea,
+                    "vat_percentage": vat,
+                    "vat_amount": vat_amount,
+                    "irpf_percentage": irpf,
+                    "irpf_amount": irpf_amount,
+                    "total": total_linea
+                })
+            
+            base_total = sum(l["base_amount"] for l in lineas_rect)
+            vat_total = sum(l["vat_amount"] for l in lineas_rect)
+            irpf_total = sum(l["irpf_amount"] for l in lineas_rect)
+            total_factura = base_total + vat_total - irpf_total
+            
+            col_r1, col_r2, col_r3, col_r4 = st.columns(4)
+            col_r1.metric("Base imponible", money(base_total))
+            col_r2.metric("IVA", money(vat_total))
+            col_r3.metric("IRPF", f"-{money(irpf_total)}")
+            col_r4.metric("TOTAL", money(total_factura))
+            
+            st.markdown("---")
+            col_btn_rect1, col_btn_rect2 = st.columns(2)
+            
+            with col_btn_rect1:
+                if st.button("💾 Guardar rectificativa", key="btn_guardar_rect", use_container_width=True):
+                    if num:
+                        inv_data = {
+                            "user_id": user_id,
+                            "invoice_number": num.strip(),
+                            "date": str(fecha),
+                            "month": mes,
+                            "client_id": cliente_row["id"],
+                            "concept": lineas_rect[0]["description"] if len(lineas_rect) == 1 else "Varios conceptos",
+                            "base_amount": base_total,
+                            "vat_percentage": lineas_rect[0]["vat_percentage"] if lineas_rect else 21,
+                            "irpf_percentage": lineas_rect[0]["irpf_percentage"] if lineas_rect else 0,
+                            "vat_amount": vat_total,
+                            "irpf_amount": irpf_total,
+                            "total": total_factura,
+                            "status": "pendiente",
+                            "tipo": "rectificativa",
+                            "id_factura_original": original["id"]
+                        }
+                        with st.spinner("Guardando factura rectificativa..."):
+                            exito, invoice_id, mensaje = crear_factura_con_rollback(
+                                inv_data, lineas_rect, user_id, cliente_row["name"]
+                            )
+                        if exito:
+                            try:
+                                supabase.table("invoices_v2").update({"status": "rectificada"}).eq("id", original["id"]).execute()
+                                auditar_factura(original["id"], "rectificada", inv_data.get("hash", ""), user_id)
+                            except Exception as e:
+                                st.error(f"Error al marcar factura original como rectificada: {e}")
+                            st.toast("✅ Factura rectificativa creada", icon="✅")
+                            st.success(mensaje)
+                            st.session_state.modo_rectificativa = False
+                            get_invoices.clear()
+                            time.sleep(0.5)
+                            st.rerun()
+                        else:
+                            st.error(mensaje)
+            
+            with col_btn_rect2:
+                if st.button("❌ Cancelar", key="btn_cancel_rect", use_container_width=True):
                     st.session_state.modo_rectificativa = False
                     st.rerun()
 
-    # ============ TABLA DE FACTURAS EMITIDAS ============
+    # ============================================================
+    # TABLA DE FACTURAS EMITIDAS
+    # ============================================================
     inv_df = get_invoices(user_id)
     if not inv_df.empty:
         inv_display = inv_df.copy()
@@ -1205,7 +1426,6 @@ elif menu == "💰 Ventas":
                             "vat_amount": factura_row["vat_amount"], "irpf_amount": factura_row["irpf_amount"],
                             "total": factura_row["total"]
                         }]
-                        # CORRECCIÓN FUGA DE DATOS: company_config sin AUTONOMO
                         try:
                             config_res = supabase.table("settings").select("*").eq("user_id", user_id).execute()
                             if config_res.data and len(config_res.data) > 0:
@@ -1321,7 +1541,6 @@ elif menu == "💰 Ventas":
             st.info("Haz clic en una fila para seleccionar una factura.")
     else:
         st.info("No hay facturas emitidas.")
-
 # ════════════════════════════════════════════════════════════
 # COMPRAS
 # ════════════════════════════════════════════════════════════
