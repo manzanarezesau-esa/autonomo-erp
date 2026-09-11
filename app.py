@@ -261,86 +261,177 @@ if not user_id:
     st.stop()
 
 # ════════════════════════════════════════════════════════════
+
 # SALPICADERO
+
 # ════════════════════════════════════════════════════════════
+
 if menu == "🏠 Salpicadero":
-    st.title("Panel de Control")
-    st.markdown("""
-    <div style="background-color: #E0E7FF; padding: 20px; border-radius: 10px; margin-bottom: 20px;">
-        <h1 style="color: #1E3A8A; text-align: center; margin: 0;">Hondureformas</h1>
-        <p style="text-align: center; color: #4a5568; font-size: 18px;">Resumen de tu negocio</p>
-    </div>
-    """, unsafe_allow_html=True)
-    st.write(f"📅 Hoy es {date.today().strftime('%d/%m/%Y')}  |  Bienvenido, {st.session_state.user.email}")
 
-    hoy = date.today()
-    mes_actual = hoy.month
-    anio_actual = hoy.year
+st.title("Panel de Control")
 
-    periodo = st.selectbox("📅 Período", ["Mes actual", "Trimestre actual", "Año actual", "Todo"], index=0)
+st.markdown("""
 
-    inv = get_invoices(user_id)
-    exp = get_expenses(user_id)
+<div style="background-color: #E0E7FF; padding: 20px; border-radius: 10px; margin-bottom: 20px;">
 
-    if not inv.empty:
-        inv["date_dt"] = pd.to_datetime(inv["date"], errors="coerce")
-        inv["year"] = inv["date_dt"].dt.year
-    if not exp.empty:
-        exp["date_dt"] = pd.to_datetime(exp["date"], errors="coerce")
-        exp["year"] = exp["date_dt"].dt.year
+<h1 style="color: #1E3A8A; text-align: center; margin: 0;">Hondureformas</h1>
 
-    if periodo == "Mes actual":
-        if not inv.empty:
-            inv = inv[(inv["year"] == anio_actual) & (inv["month"] == LISTA_MESES[mes_actual-1])]
-        if not exp.empty:
-            exp = exp[(exp["year"] == anio_actual) & (exp["month"] == LISTA_MESES[mes_actual-1])]
-    elif periodo == "Trimestre actual":
-        if mes_actual <= 3:
-            meses_trim = ["Enero", "Febrero", "Marzo"]
-        elif mes_actual <= 6:
-            meses_trim = ["Abril", "Mayo", "Junio"]
-        elif mes_actual <= 9:
-            meses_trim = ["Julio", "Agosto", "Septiembre"]
-        else:
-            meses_trim = ["Octubre", "Noviembre", "Diciembre"]
-        if not inv.empty:
-            inv = inv[(inv["year"] == anio_actual) & (inv["month"].isin(meses_trim))]
-        if not exp.empty:
-            exp = exp[(exp["year"] == anio_actual) & (exp["month"].isin(meses_trim))]
-    elif periodo == "Año actual":
-        if not inv.empty:
-            inv = inv[inv["year"] == anio_actual]
-        if not exp.empty:
-            exp = exp[exp["year"] == anio_actual]
+<p style="text-align: center; color: #4a5568; font-size: 18px;">Resumen de tu negocio</p>
 
-    bv = pd.to_numeric(inv["base_amount"], errors="coerce").sum() if not inv.empty else 0.0
-    bg = pd.to_numeric(exp["base_amount"], errors="coerce").sum() if not exp.empty else 0.0
-    ben = bv - bg
-    iva_dev = pd.to_numeric(inv["vat_amount"], errors="coerce").sum() if not inv.empty else 0.0
-    iva_sop = pd.to_numeric(exp["vat_amount"], errors="coerce").sum() if not exp.empty else 0.0
-    iva_pagar = max(iva_dev - iva_sop, 0.0)
-    irpf_total = pd.to_numeric(inv["irpf_amount"], errors="coerce").sum() if not inv.empty else 0.0
-    pago_frac = ben * 0.20 if ben > 0 else 0.0
-    neto_final = ben - iva_pagar - irpf_total - pago_frac
+</div>
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Ingresos", money(bv))
-    c2.metric("Gastos", money(bg))
-    c3.metric("Beneficio bruto", money(ben))
-    st.markdown("---")
-    c4, c5, c6 = st.columns(3)
-    c4.metric("Provisión IVA", f"-{money(iva_pagar)}")
-    c5.metric("IRPF (retenido)", f"-{money(irpf_total)}")
-    c6.metric("Pago fraccionado IRPF (20%)", f"-{money(pago_frac)}")
-    st.metric("🔥 GANANCIA NETA (después de impuestos)", money(neto_final))
+""", unsafe_allow_html=True)
 
-    st.markdown("---")
-    num_facturas = len(inv) if not inv.empty else 0
-    num_gastos = len(exp) if not exp.empty else 0
-    col_f1, col_f2, col_f3 = st.columns(3)
-    col_f1.metric("Facturas emitidas", num_facturas)
-    col_f2.metric("Gastos registrados", num_gastos)
-    col_f3.metric("Promedio por factura", money(bv/num_facturas) if num_facturas > 0 else "0.00 €")
+st.write(f"📅 Hoy es {date.today().strftime('%d/%m/%Y')} | Bienvenido, {st.session_state.user.email}")
+
+
+
+hoy = date.today()
+
+mes_actual = hoy.month
+
+anio_actual = hoy.year
+
+
+
+periodo = st.selectbox("📅 Período", ["Mes actual", "Trimestre actual", "Año actual", "Todo"], index=0)
+
+
+
+inv = get_invoices(user_id)
+
+exp = get_expenses(user_id)
+
+
+
+if not inv.empty:
+
+inv["date_dt"] = pd.to_datetime(inv["date"], errors="coerce")
+
+inv["year"] = inv["date_dt"].dt.year
+
+if not exp.empty:
+
+exp["date_dt"] = pd.to_datetime(exp["date"], errors="coerce")
+
+exp["year"] = exp["date_dt"].dt.year
+
+
+
+if periodo == "Mes actual":
+
+if not inv.empty:
+
+inv = inv[(inv["year"] == anio_actual) & (inv["month"] == LISTA_MESES[mes_actual-1])]
+
+if not exp.empty:
+
+exp = exp[(exp["year"] == anio_actual) & (exp["month"] == LISTA_MESES[mes_actual-1])]
+
+elif periodo == "Trimestre actual":
+
+if mes_actual <= 3:
+
+meses_trim = ["Enero", "Febrero", "Marzo"]
+
+elif mes_actual <= 6:
+
+meses_trim = ["Abril", "Mayo", "Junio"]
+
+elif mes_actual <= 9:
+
+meses_trim = ["Julio", "Agosto", "Septiembre"]
+
+else:
+
+meses_trim = ["Octubre", "Noviembre", "Diciembre"]
+
+if not inv.empty:
+
+inv = inv[(inv["year"] == anio_actual) & (inv["month"].isin(meses_trim))]
+
+if not exp.empty:
+
+exp = exp[(exp["year"] == anio_actual) & (exp["month"].isin(meses_trim))]
+
+elif periodo == "Año actual":
+
+if not inv.empty:
+
+inv = inv[inv["year"] == anio_actual]
+
+if not exp.empty:
+
+exp = exp[exp["year"] == anio_actual]
+
+
+
+bv = pd.to_numeric(inv["base_amount"], errors="coerce").sum() if not inv.empty else 0.0
+
+bg = pd.to_numeric(exp["base_amount"], errors="coerce").sum() if not exp.empty else 0.0
+
+ben = bv - bg
+
+iva_dev = pd.to_numeric(inv["vat_amount"], errors="coerce").sum() if not inv.empty else 0.0
+
+iva_sop = pd.to_numeric(exp["vat_amount"], errors="coerce").sum() if not exp.empty else 0.0
+
+iva_pagar = max(iva_dev - iva_sop, 0.0)
+
+irpf_total = pd.to_numeric(inv["irpf_amount"], errors="coerce").sum() if not inv.empty else 0.0
+
+pago_frac = ben * 0.20 if ben > 0 else 0.0
+
+
+# ══════════════════════════════════════════════════════════
+
+# CORRECCIÓN: El IVA NO es un gasto real del negocio
+
+# Solo restamos el pago fraccionado IRPF y el IRPF retenido
+
+# ══════════════════════════════════════════════════════════
+
+ganancia_neta = ben - pago_frac - irpf_total
+
+
+
+c1, c2, c3 = st.columns(3)
+
+c1.metric("Ingresos", money(bv))
+
+c2.metric("Gastos", money(bg))
+
+c3.metric("Beneficio bruto", money(ben))
+
+st.markdown("---")
+
+c4, c5, c6 = st.columns(3)
+
+c4.metric("Provisión IVA (informativo)", f"-{money(iva_pagar)}")
+
+c5.metric("IRPF (retenido)", f"-{money(irpf_total)}")
+
+c6.metric("Pago fraccionado IRPF (20%)", f"-{money(pago_frac)}")
+
+st.metric("🔥 GANANCIA NETA (después de impuestos)", money(ganancia_neta))
+
+
+
+st.markdown("---")
+
+num_facturas = len(inv) if not inv.empty else 0
+
+num_gastos = len(exp) if not exp.empty else 0
+
+col_f1, col_f2, col_f3 = st.columns(3)
+
+col_f1.metric("Facturas emitidas", num_facturas)
+
+col_f2.metric("Gastos registrados", num_gastos)
+
+col_f3.metric("Promedio por factura", money(bv/num_facturas) if num_facturas > 0 else "0.00 €")
+
+
 
 # ════════════════════════════════════════════════════════════
 # CLIENTES
