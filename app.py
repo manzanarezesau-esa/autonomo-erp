@@ -2290,20 +2290,36 @@ elif menu == "📖 Libro Contable General":
 # ════════════════════════════════════════════════════════════
 elif menu == "📒 Contabilidad":
     st.title("Contabilidad de doble partida")
-    submenu = st.radio("Seleccionar", ["Libro Diario", "Mayor", "PyG y Balance"])
+    submenu = st.radio("Seleccionar informe", ["Libro Diario", "Mayor", "PyG y Balance"], horizontal=True)
+    st.markdown("---")
+
     if submenu == "Libro Diario":
         entries = get_journal_entries(user_id)
         if not entries.empty:
-            entry_id = st.selectbox("Selecciona un asiento", entries["id"].tolist(),
-                                    format_func=lambda x: entries[entries["id"]==x]["date"].values[0] + " - " + entries[entries["id"]==x]["description"].values[0])
+            entry_id = st.selectbox(
+                "Selecciona un asiento contable", 
+                entries["id"].tolist(),
+                format_func=lambda x: f"📅 {entries[entries['id']==x]['date'].values[0]} — {entries[entries['id']==x]['description'].values[0]}"
+            )
             try:
                 lineas = supabase.table("journal_entry_lines").select("*").eq("journal_entry_id", entry_id).execute()
                 lineas_df = pd.DataFrame(lineas.data) if lineas.data else pd.DataFrame()
-                st.dataframe(lineas_df[["account", "debit", "credit", "description"]])
+                
+                if not lineas_df.empty:
+                    column_config = {
+                        "account": st.column_config.TextColumn("Cuenta", width="medium"),
+                        "debit": st.column_config.NumberColumn("Debe", format="%.2f €", width="small"),
+                        "credit": st.column_config.NumberColumn("Haber", format="%.2f €", width="small"),
+                        "description": st.column_config.TextColumn("Concepto", width="large")
+                    }
+                    st.dataframe(lineas_df[["account", "debit", "credit", "description"]], hide_index=True, use_container_width=True, column_config=column_config)
+                else:
+                    st.info("El asiento no contiene líneas contables.")
             except Exception as e:
                 st.error(f"Error al cargar líneas del asiento: {e}")
         else:
-            st.info("Aún no hay asientos contables.")
+            st.info("Aún no hay asientos contables registrados.")
+
     elif submenu == "Mayor":
         try:
             entries_user = supabase.table("journal_entries").select("id").eq("user_id", user_id).execute()
@@ -2313,65 +2329,118 @@ elif menu == "📒 Contabilidad":
                 cuentas_df = pd.DataFrame(cuentas.data) if cuentas.data else pd.DataFrame()
             else:
                 cuentas_df = pd.DataFrame()
+                
             if not cuentas_df.empty:
-                cuenta_sel = st.selectbox("Selecciona cuenta", cuentas_df["account"].unique())
+                col_sel, col_sal = st.columns([2, 1])
+                with col_sel:
+                    cuenta_sel = st.selectbox("Selecciona la cuenta contable", sorted(cuentas_df["account"].unique()))
+                
                 movs = supabase.table("journal_entry_lines").select("*, journal_entries(date)").in_("journal_entry_id", entry_ids).eq("account", cuenta_sel).execute()
                 movs_df = pd.DataFrame(movs.data) if movs.data else pd.DataFrame()
+                
                 if not movs_df.empty:
                     movs_df["date"] = movs_df["journal_entries"].apply(lambda x: x["date"] if isinstance(x, dict) else "")
-                    st.dataframe(movs_df[["date", "description", "debit", "credit"]])
+                    movs_df["date"] = pd.to_datetime(movs_df["date"]).dt.strftime("%d/%m/%Y")
+                    
                     saldo = movs_df["debit"].sum() - movs_df["credit"].sum()
-                    st.metric("Saldo", money(saldo))
+                    with col_sal:
+                        st.metric("Saldo Acumulado", money(saldo))
+                    
+                    column_config = {
+                        "date": st.column_config.TextColumn("Fecha", width="small"),
+                        "description": st.column_config.TextColumn("Concepto", width="large"),
+                        "debit": st.column_config.NumberColumn("Debe", format="%.2f €", width="small"),
+                        "credit": st.column_config.NumberColumn("Haber", format="%.2f €", width="small")
+                    }
+                    st.dataframe(movs_df[["date", "description", "debit", "credit"]], hide_index=True, use_container_width=True, column_config=column_config)
             else:
-                st.info("Sin movimientos.")
+                st.info("Sin movimientos registrados en el mayor.")
         except Exception as e:
-            st.error(f"Error al cargar mayor: {e}")
+            st.error(f"Error al cargar el libro mayor: {e}")
+
     elif submenu == "PyG y Balance":
-        st.subheader("📊 Cuenta de Pérdidas y Ganancias")
+        st.subheader("📊 Cuenta de Pérdidas y Ganancias (PyG)")
         inv = get_invoices(user_id)
         exp = get_expenses(user_id)
+        
         if not inv.empty:
             inv["year"] = pd.to_datetime(inv["date"], errors="coerce").dt.year
         if not exp.empty:
             exp["year"] = pd.to_datetime(exp["date"], errors="coerce").dt.year
+            
         anios_disponibles = set()
         if not inv.empty: anios_disponibles.update(inv["year"].dropna().unique())
         if not exp.empty: anios_disponibles.update(exp["year"].dropna().unique())
-        anios_disponibles = sorted(anios_disponibles, reverse=True)
+        anios_disponibles = sorted([int(y) for y in anios_disponibles], reverse=True)
+        
         if not anios_disponibles:
-            st.info("No hay datos para mostrar.")
+            st.info("No hay datos contables para mostrar informes.")
             st.stop()
-        anio_sel = st.selectbox("Año", anios_disponibles, index=0)
+            
+        col_filtro, _ = st.columns([1, 2])
+        with col_filtro:
+            anio_sel = st.selectbox("📅 Ejercicio Fiscal", anios_disponibles, index=0)
+            
         inv_f = inv[inv["year"] == anio_sel] if not inv.empty else pd.DataFrame()
         exp_f = exp[exp["year"] == anio_sel] if not exp.empty else pd.DataFrame()
+        
         total_ingresos = inv_f["base_amount"].sum() if not inv_f.empty else 0.0
         total_gastos = exp_f["base_amount"].sum() if not exp_f.empty else 0.0
         resultado_bruto = total_ingresos - total_gastos
+        
+        # Cálculo de IRPF y Resultado Neto
+        irpf_retenido = inv_f["irpf_amount"].sum() if (not inv_f.empty and "irpf_amount" in inv_f.columns) else 0.0
+        pago_frac_est = resultado_bruto * 0.20 if resultado_bruto > 0 else 0.0
+        resultado_neto = resultado_bruto - pago_frac_est - irpf_retenido
+
         if not exp_f.empty and "expense_type" in exp_f.columns:
             gastos_por_tipo = exp_f.groupby("expense_type")["base_amount"].sum()
         else:
             gastos_por_tipo = pd.Series()
-        col1, col2 = st.columns(2)
+
+        col1, col2 = st.columns([1.2, 1])
+        
         with col1:
-            st.markdown("**Ingresos**")
-            st.write(f"Ventas y servicios: {money(total_ingresos)}")
-            st.markdown("**Gastos**")
-            for tipo, importe in gastos_por_tipo.items():
-                st.write(f"{tipo}: {money(importe)}")
-            st.write(f"**Total Gastos:** {money(total_gastos)}")
+            with st.container(border=True):
+                st.markdown("### 📥 Desglose Explotación")
+                st.write(f"🟢 **Ventas y Servicios:** {money(total_ingresos)}")
+                st.markdown("---")
+                st.markdown("**🔴 Gastos Deducibles por Categoría:**")
+                if not gastos_por_tipo.empty:
+                    for tipo, importe in gastos_por_tipo.items():
+                        st.write(f"• **{tipo}:** {money(importe)}")
+                else:
+                    st.write("Sin gastos registrados.")
+                st.markdown("---")
+                st.write(f"**Total Gastos Deducibles:** {money(total_gastos)}")
+
         with col2:
-            st.markdown("**Resultados**")
-            st.metric("Resultado Bruto (PyG)", money(resultado_bruto))
+            with st.container(border=True):
+                st.markdown("### 📈 Resultados del Ejercicio")
+                st.metric("Resultado Bruto (PyG)", money(resultado_bruto))
+                st.caption("Beneficio antes de impuestos (Base Imponible)")
+                st.markdown("---")
+                if irpf_retenido > 0:
+                    st.metric("IRPF Retenido en Facturas", f"-{money(irpf_retenido)}")
+                else:
+                    st.metric("Pago Fraccionado IRPF (20%)", f"-{money(pago_frac_est)}")
+                st.markdown("---")
+                st.metric("🔥 GANANCIA NETA ESTIMADA", money(resultado_neto))
+
         st.markdown("---")
         st.subheader("⚖️ Balance de Situación (resumido)")
+        
         activo_corriente = inv_f["total"].sum() if not inv_f.empty else 0.0
         pasivo_corriente = exp_f["total"].sum() if not exp_f.empty else 0.0
         patrimonio_neto = activo_corriente - pasivo_corriente
-        col_b1, col_b2, col_b3 = st.columns(3)
-        col_b1.metric("Activo", money(activo_corriente))
-        col_b2.metric("Pasivo", money(pasivo_corriente))
-        col_b3.metric("Patrimonio Neto", money(patrimonio_neto))
-        st.caption("Balance simplificado.")
+        
+        # Proporción [1.1, 1.1, 1.4] para evitar truncar el texto de "Patrimonio Neto"
+        col_b1, col_b2, col_b3 = st.columns([1.1, 1.1, 1.4])
+        col_b1.metric("Activo Corriente", money(activo_corriente), help="Facturación total acumulada con IVA")
+        col_b2.metric("Pasivo Corriente", money(pasivo_corriente), help="Gastos totales acumulados con IVA")
+        col_b3.metric("Patrimonio Neto", money(patrimonio_neto), help="Activo total menos Pasivo total")
+        
+        st.caption("💡 *El Balance resumido muestra el saldo de liquidez bruta (Bases + IVA) registrado en el ejercicio.*")
 # ════════════════════════════════════════════════════════════
 # IMPUESTOS TRIMESTRALES (CORREGIDO - sin fuga de datos)
 # ════════════════════════════════════════════════════════════
