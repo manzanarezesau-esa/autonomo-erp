@@ -1546,7 +1546,7 @@ elif menu == "💰 Ventas":
     else:
         st.info("No hay facturas emitidas.")
 # ════════════════════════════════════════════════════════════
-# COMPRAS
+# COMPRAS (CORREGIDO - IVA 0% para Seguridad Social)
 # ════════════════════════════════════════════════════════════
 elif menu == "🛒 Compras":
     st.title("Gastos / Compras")
@@ -1568,8 +1568,26 @@ elif menu == "🛒 Compras":
                 tipo_gasto = st.selectbox("Tipo de gasto", TIPOS_GASTO)
                 concepto = st.text_input("Concepto (descripción adicional)")
                 base = st.number_input("Base imponible", min_value=0.0, step=10.0)
-                vat_pct = st.number_input("% IVA", value=21.0, step=1.0)
+                
+                # ============================================================
+                # CORRECCIÓN: Seguridad Social → IVA forzado a 0%
+                # ============================================================
+                if tipo_gasto == "Seguridad Social":
+                    vat_pct = 0.0
+                    st.info("ℹ️ **Seguridad Social** → IVA exento (0%). Es un gasto deducible sin IVA soportado.")
+                    st.number_input(
+                        "% IVA",
+                        value=0.0,
+                        step=0.0,
+                        disabled=True,
+                        key="add_vat_ss_disabled",
+                        help="La Seguridad Social está exenta de IVA por ley"
+                    )
+                else:
+                    vat_pct = st.number_input("% IVA", value=21.0, step=1.0)
+                
                 archivo = st.file_uploader("Subir factura (PDF o imagen)", type=["pdf", "png", "jpg", "jpeg"])
+                
                 if st.form_submit_button("Guardar") and num:
                     id_prov = proveedores_df.loc[proveedores_df["name"] == prov_nombre, "id"].values[0]
                     vat_amount = base * vat_pct / 100.0
@@ -1609,6 +1627,10 @@ elif menu == "🛒 Compras":
                         st.rerun()
                     else:
                         st.error(mensaje)
+        
+        # ============================================================
+        # EDICIÓN DE GASTO
+        # ============================================================
         if st.session_state.modo_edicion_gasto:
             st.warning("Editando gasto")
             datos = st.session_state.datos_edicion_gasto
@@ -1627,8 +1649,26 @@ elif menu == "🛒 Compras":
                 tipo_gasto = st.selectbox("Tipo de gasto", TIPOS_GASTO, index=TIPOS_GASTO.index(datos.get("expense_type", "Otros")) if datos.get("expense_type", "Otros") in TIPOS_GASTO else 0)
                 concepto = st.text_input("Concepto", value=datos.get("category", ""))
                 base = st.number_input("Base imponible", value=float(datos.get("base_amount", 0)), min_value=0.0, step=10.0)
-                vat_pct = st.number_input("% IVA", value=float(datos.get("vat_percentage", 21)), step=1.0)
+                
+                # ============================================================
+                # CORRECCIÓN: Seguridad Social → IVA forzado a 0% (edición)
+                # ============================================================
+                if tipo_gasto == "Seguridad Social":
+                    vat_pct = 0.0
+                    st.info("ℹ️ **Seguridad Social** → IVA exento (0%).")
+                    st.number_input(
+                        "% IVA",
+                        value=0.0,
+                        step=0.0,
+                        disabled=True,
+                        key="edit_vat_ss_disabled",
+                        help="La Seguridad Social está exenta de IVA por ley"
+                    )
+                else:
+                    vat_pct = st.number_input("% IVA", value=float(datos.get("vat_percentage", 21)), step=1.0)
+                
                 nuevo_archivo = st.file_uploader("Cambiar archivo (dejar vacío para mantener actual)", type=["pdf", "png", "jpg", "jpeg"])
+                
                 if st.form_submit_button("Guardar cambios"):
                     vat_amount = base * vat_pct / 100.0
                     total = base + vat_amount
@@ -1664,6 +1704,9 @@ elif menu == "🛒 Compras":
                     st.session_state.modo_edicion_gasto = False
                     st.rerun()
 
+    # ============================================================
+    # LISTADO DE GASTOS
+    # ============================================================
     exp_df = get_expenses(user_id)
     if not exp_df.empty:
         exp_display = exp_df.copy()
