@@ -2171,35 +2171,56 @@ elif menu == "🔄 Facturación recurrente":
             st.error(f"Error al generar facturas recurrentes: {e}")
 
 # ════════════════════════════════════════════════════════════
-# LIBRO CONTABLE GENERAL (MEJORADO)
+# LIBRO CONTABLE GENERAL
 # ════════════════════════════════════════════════════════════
 elif menu == "📖 Libro Contable General":
-    st.title("📖 Libro Registro")
-    
+    st.title("📖 Libro Registro Contable")
+    st.caption("Consolidado oficial de facturas emitidas (ventas) y recibidas (gastos)")
+
     inv = get_invoices(user_id)
     exp = get_expenses(user_id)
-    
+
+    # Procesamiento y unificación de Facturas de Venta
     if not inv.empty:
         inv["date_dt"] = pd.to_datetime(inv["date"], errors="coerce")
         inv["year"] = inv["date_dt"].dt.year
-        inv["tipo"] = "Venta"
-        inv.rename(columns={"invoice_number": "numero"}, inplace=True)
+        inv["month_num"] = inv["date_dt"].dt.month
+        inv["tipo"] = "🟢 Venta"
+        
+        if "invoice_number" in inv.columns:
+            inv.rename(columns={"invoice_number": "numero"}, inplace=True)
+        elif "number" in inv.columns:
+            inv.rename(columns={"number": "numero"}, inplace=True)
+            
+        if "concept" not in inv.columns and "description" in inv.columns:
+            inv.rename(columns={"description": "concept"}, inplace=True)
+            
         if "irpf_amount" not in inv.columns:
             inv["irpf_amount"] = 0.0
-    
+
+    # Procesamiento y unificación de Gastos
     if not exp.empty:
         exp["date_dt"] = pd.to_datetime(exp["date"], errors="coerce")
         exp["year"] = exp["date_dt"].dt.year
-        exp["tipo"] = "Gasto"
-        exp.rename(columns={"expense_number": "numero"}, inplace=True)
-        if "category" in exp.columns:
+        exp["month_num"] = exp["date_dt"].dt.month
+        exp["tipo"] = "🔴 Gasto"
+        
+        if "expense_number" in exp.columns:
+            exp.rename(columns={"expense_number": "numero"}, inplace=True)
+        elif "number" in exp.columns:
+            exp.rename(columns={"number": "numero"}, inplace=True)
+            
+        if "category" in exp.columns and "concept" not in exp.columns:
             exp.rename(columns={"category": "concept"}, inplace=True)
+        elif "description" in exp.columns and "concept" not in exp.columns:
+            exp.rename(columns={"description": "concept"}, inplace=True)
+            
         if "irpf_amount" not in exp.columns:
             exp["irpf_amount"] = 0.0
-    
+
     st.subheader("🔍 Filtros de Período")
     col_f1, col_f2 = st.columns(2)
-    
+
     with col_f1:
         anios_disponibles = set()
         if not inv.empty:
@@ -2207,76 +2228,98 @@ elif menu == "📖 Libro Contable General":
         if not exp.empty:
             anios_disponibles.update(exp["year"].dropna().unique())
         if not anios_disponibles:
-            anios_disponibles = {date.today().year}
-        anios_disponibles = sorted(anios_disponibles, reverse=True)
-        anio_seleccionado = st.selectbox("📅 Año", anios_disponibles, index=0)
-    
+            anios_disponibles = {datetime.now().year}
+        anios_disponibles = sorted([int(y) for y in anios_disponibles], reverse=True)
+        anio_seleccionado = st.selectbox("📅 Ejercicio Fiscal", anios_disponibles, index=0)
+
     with col_f2:
         mes_seleccionado = st.selectbox("📆 Mes", LISTA_MESES, index=datetime.now().month - 1)
-    
-    inv_filtrado = inv[(inv["year"] == anio_seleccionado) & (inv["month"] == mes_seleccionado)].copy() if not inv.empty else pd.DataFrame()
-    exp_filtrado = exp[(exp["year"] == anio_seleccionado) & (exp["month"] == mes_seleccionado)].copy() if not exp.empty else pd.DataFrame()
-    
+        # Obtener el índice numérico del mes seleccionado (1-12)
+        mes_num_sel = LISTA_MESES.index(mes_seleccionado) + 1 if mes_seleccionado in LISTA_MESES else datetime.now().month
+
+    # Filtrar por año y número de mes
+    inv_filtrado = inv[(inv["year"] == anio_seleccionado) & (inv["month_num"] == mes_num_sel)].copy() if not inv.empty else pd.DataFrame()
+    exp_filtrado = exp[(exp["year"] == anio_seleccionado) & (exp["month_num"] == mes_num_sel)].copy() if not exp.empty else pd.DataFrame()
+
     df_completo = pd.concat([inv_filtrado, exp_filtrado], ignore_index=True)
-    
+
     if df_completo.empty:
-        st.info(f"No hay movimientos en {mes_seleccionado} de {anio_seleccionado}.")
+        st.info(f"No hay movimientos contables registrados en {mes_seleccionado} de {anio_seleccionado}.")
         st.stop()
-    
+
     st.markdown("---")
     st.subheader(f"📊 Resumen de {mes_seleccionado} {anio_seleccionado}")
-    
-    total_base = pd.to_numeric(df_completo["base_amount"], errors="coerce").sum()
+
+    # Cálculos detallados
+    base_ventas = pd.to_numeric(inv_filtrado["base_amount"], errors="coerce").sum() if not inv_filtrado.empty else 0.0
+    base_gastos = pd.to_numeric(exp_filtrado["base_amount"], errors="coerce").sum() if not exp_filtrado.empty else 0.0
+    beneficio_bruto = base_ventas - base_gastos
+
     total_iva_repercutido = pd.to_numeric(inv_filtrado["vat_amount"], errors="coerce").sum() if not inv_filtrado.empty else 0.0
     total_iva_soportado = pd.to_numeric(exp_filtrado["vat_amount"], errors="coerce").sum() if not exp_filtrado.empty else 0.0
-    total_general = pd.to_numeric(df_completo["total"], errors="coerce").sum()
+    iva_neto = total_iva_repercutido - total_iva_soportado
     num_registros = len(df_completo)
-    
-    col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-    col_m1.metric("💰 Total Base Imponible", money(total_base))
-    col_m2.metric("📄 IVA Repercutido", money(total_iva_repercutido))
-    col_m3.metric("🧾 IVA Soportado", money(total_iva_soportado))
-    col_m4.metric("📊 Total General", money(total_general))
-    
-    col_m5, col_m6 = st.columns(2)
-    col_m5.metric("📋 Nº de Registros", num_registros)
-    col_m6.metric("IVA Neto", money(total_iva_repercutido - total_iva_soportado))
-    
+
+    # Tarjeta resumida con diseño limpio
+    with st.container(border=True):
+        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+        col_m1.metric("🟢 Base Ventas", money(base_ventas))
+        col_m2.metric("🔴 Base Gastos", money(base_gastos))
+        col_m3.metric("📄 IVA Repercutido", money(total_iva_repercutido))
+        col_m4.metric("🧾 IVA Soportado", money(total_iva_soportado))
+
+        st.markdown("---")
+
+        col_m5, col_m6, col_m7 = st.columns(3)
+        col_m5.metric("📈 Beneficio Bruto", money(beneficio_bruto))
+        col_m6.metric(
+            "💶 IVA Neto (Modelo 303)",
+            money(iva_neto),
+            delta="A ingresar a Hacienda" if iva_neto > 0 else "A compensar/devolver",
+            delta_color="inverse" if iva_neto > 0 else "normal"
+        )
+        col_m7.metric("📋 Nº de Registros", f"{num_registros} ops.")
+
     st.markdown("---")
+    st.subheader("📋 Registros del Período")
+
     df_display = df_completo.copy()
-    columnas_mostrar = ["numero", "date_dt", "concept", "base_amount", "vat_amount", "total", "tipo"]
+    columnas_mostrar = ["tipo", "numero", "date_dt", "concept", "base_amount", "vat_amount", "total"]
+
     for col in columnas_mostrar:
         if col not in df_display.columns:
             df_display[col] = ""
+
     df_display = df_display[columnas_mostrar].copy()
-    df_display.columns = ["numero", "date", "concept", "base_amount", "vat_amount", "total", "tipo"]
-    df_display["date"] = pd.to_datetime(df_display["date"], errors="coerce")
-    
+    df_display.columns = ["tipo", "numero", "date", "concept", "base_amount", "vat_amount", "total"]
+
     column_config = {
-        "numero": st.column_config.TextColumn("Nº Factura", width="small"),
+        "tipo": st.column_config.TextColumn("Tipo", width="small"),
+        "numero": st.column_config.TextColumn("Nº Factura / Doc", width="medium"),
         "date": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY", width="small"),
         "concept": st.column_config.TextColumn("Concepto", width="large"),
         "base_amount": st.column_config.NumberColumn("Base Imponible", format="%.2f €"),
         "vat_amount": st.column_config.NumberColumn("Cuota IVA", format="%.2f €"),
         "total": st.column_config.NumberColumn("Total", format="%.2f €"),
-        "tipo": st.column_config.TextColumn("Tipo", width="small"),
     }
-    
-    st.subheader("📋 Registros del Período")
+
     st.dataframe(df_display, hide_index=True, use_container_width=True, column_config=column_config)
-    
+
     st.markdown("---")
+    # Preparación del archivo CSV para descarga
     export_df = df_completo.copy()
     export_df["date"] = pd.to_datetime(export_df["date_dt"], errors="coerce").dt.strftime("%d/%m/%Y")
-    columnas_export = ["numero", "date", "concept", "base_amount", "vat_amount", "total", "tipo"]
+    columnas_export = ["tipo", "numero", "date", "concept", "base_amount", "vat_amount", "total"]
+
     for col in columnas_export:
         if col not in export_df.columns:
             export_df[col] = ""
+
     export_df = export_df[columnas_export].copy()
-    export_df.columns = ["Nº Factura", "Fecha", "Concepto", "Base Imponible", "Cuota IVA", "Total", "Tipo"]
-    
+    export_df.columns = ["Tipo", "Nº Factura", "Fecha", "Concepto", "Base Imponible", "Cuota IVA", "Total"]
+
     csv_bytes = export_df.to_csv(index=False, sep=';').encode('utf-8-sig')
-    
+
     st.download_button(
         "⬇️ Exportar a CSV (compatible con Excel)",
         csv_bytes,
