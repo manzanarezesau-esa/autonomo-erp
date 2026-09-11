@@ -2705,155 +2705,254 @@ elif menu == "🏦 Conciliación Bancaria":
         st.info("No hay movimientos bancarios.")
 
 # ════════════════════════════════════════════════════════════
-# DASHBOARDS MEJORADO
+# DASHBOARDS DE FACTURACIÓN (PROFESIONAL Y OPTIMIZADO)
 # ════════════════════════════════════════════════════════════
 elif menu == "📊 Dashboards":
     st.title("📊 Dashboards de Facturación")
-    
+    st.caption("Análisis visual de rendimiento, control fiscal y estado operacional")
+
     invoices = get_invoices(user_id)
     expenses = get_expenses(user_id)
-    
+
     if invoices.empty and expenses.empty:
-        st.info("No hay datos para mostrar.")
+        st.info("No hay datos contables registrados para generar analíticas.")
         st.stop()
-    
+
+    # Normalización de datos de ingresos
     if not invoices.empty:
         invoices["date_dt"] = pd.to_datetime(invoices["date"], errors="coerce")
         invoices["year"] = invoices["date_dt"].dt.year
-        invoices["month_name"] = invoices["date_dt"].dt.month.apply(lambda x: LISTA_MESES[x-1] if 1 <= x <= 12 else "Desconocido")
         invoices["month_num"] = invoices["date_dt"].dt.month
-    
+        invoices["month_name"] = invoices["month_num"].apply(
+            lambda x: LISTA_MESES[x - 1] if pd.notnull(x) and 1 <= int(x) <= 12 else "Desconocido"
+        )
+        if "base_amount" not in invoices.columns and "total" in invoices.columns:
+            invoices["base_amount"] = invoices["total"] - invoices.get("vat_amount", 0.0)
+
+    # Normalización de datos de gastos
     if not expenses.empty:
         expenses["date_dt"] = pd.to_datetime(expenses["date"], errors="coerce")
         expenses["year"] = expenses["date_dt"].dt.year
-        expenses["month_name"] = expenses["date_dt"].dt.month.apply(lambda x: LISTA_MESES[x-1] if 1 <= x <= 12 else "Desconocido")
         expenses["month_num"] = expenses["date_dt"].dt.month
-    
-    st.subheader("🔍 Filtros")
+        expenses["month_name"] = expenses["month_num"].apply(
+            lambda x: LISTA_MESES[x - 1] if pd.notnull(x) and 1 <= int(x) <= 12 else "Desconocido"
+        )
+        if "base_amount" not in expenses.columns and "total" in expenses.columns:
+            expenses["base_amount"] = expenses["total"] - expenses.get("vat_amount", 0.0)
+
+    # 🔍 Filtros interactivos
+    st.subheader("🔍 Filtros de Visualización")
     col_f1, col_f2, col_f3 = st.columns(3)
+
     with col_f1:
         anios_disponibles = set()
-        if not invoices.empty: anios_disponibles.update(invoices["year"].dropna().unique())
-        if not expenses.empty: anios_disponibles.update(expenses["year"].dropna().unique())
-        anios_disponibles = sorted(anios_disponibles, reverse=True)
-        year_seleccionado = st.selectbox("📅 Año", anios_disponibles, index=0 if anios_disponibles else 0)
+        if not invoices.empty:
+            anios_disponibles.update(invoices["year"].dropna().astype(int).unique())
+        if not expenses.empty:
+            anios_disponibles.update(expenses["year"].dropna().astype(int).unique())
+        anios_disponibles = sorted(list(anios_disponibles), reverse=True)
+        if not anios_disponibles:
+            anios_disponibles = [datetime.now().year]
+        year_seleccionado = st.selectbox("📅 Ejercicio Fiscal", anios_disponibles, index=0)
+
     with col_f2:
-        opciones_meses = ["Todos"] + LISTA_MESES
-        mes_seleccionado = st.selectbox("📆 Mes", opciones_meses, index=0)
+        mes_seleccionado = st.selectbox("📆 Período", ["Todos los meses"] + LISTA_MESES, index=0)
+
     with col_f3:
-        tipo_grafico = st.selectbox("📈 Tipo", ["Barras", "Líneas", "Área"], index=0)
-    
+        tipo_grafico = st.selectbox("📈 Tipo de Gráfica", ["Barras", "Líneas", "Área"], index=0)
+
+    # Filtrado por fecha
     data_inv = invoices[invoices["year"] == year_seleccionado].copy() if not invoices.empty else pd.DataFrame()
     data_exp = expenses[expenses["year"] == year_seleccionado].copy() if not expenses.empty else pd.DataFrame()
-    
-    if mes_seleccionado != "Todos":
-        if not data_inv.empty: data_inv = data_inv[data_inv["month_name"] == mes_seleccionado]
-        if not data_exp.empty: data_exp = data_exp[data_exp["month_name"] == mes_seleccionado]
-    
+
+    if mes_seleccionado != "Todos los meses":
+        if not data_inv.empty:
+            data_inv = data_inv[data_inv["month_name"] == mes_seleccionado]
+        if not data_exp.empty:
+            data_exp = data_exp[data_exp["month_name"] == mes_seleccionado]
+
     if data_inv.empty and data_exp.empty:
-        st.warning("No hay datos en el período.")
+        st.warning(f"No hay movimientos registrados para el filtro seleccionado.")
         st.stop()
-    
+
+    # 📊 Indicadores Clave (KPIs)
     st.markdown("---")
     st.subheader("📊 Indicadores Clave")
+
+    total_ingresos = pd.to_numeric(data_inv.get("total", pd.Series()), errors="coerce").sum() if not data_inv.empty else 0.0
+    total_gastos = pd.to_numeric(data_exp.get("total", pd.Series()), errors="coerce").sum() if not data_exp.empty else 0.0
+    base_ingresos = pd.to_numeric(data_inv.get("base_amount", pd.Series()), errors="coerce").sum() if not data_inv.empty else 0.0
+    base_gastos = pd.to_numeric(data_exp.get("base_amount", pd.Series()), errors="coerce").sum() if not data_exp.empty else 0.0
     
-    total_ingresos = data_inv["total"].sum() if not data_inv.empty else 0.0
-    total_gastos = data_exp["total"].sum() if not data_exp.empty else 0.0
     num_facturas = len(data_inv) if not data_inv.empty else 0
-    beneficio = total_ingresos - total_gastos
-    promedio_factura = total_ingresos / num_facturas if num_facturas > 0 else 0
-    iva_repercutido = data_inv["vat_amount"].sum() if not data_inv.empty else 0.0
-    iva_soportado = data_exp["vat_amount"].sum() if not data_exp.empty else 0.0
-    
-    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-    kpi1.metric("💰 Ingresos", money(total_ingresos))
-    kpi2.metric("📄 Facturas", num_facturas)
-    kpi3.metric("🧾 Gastos", money(total_gastos))
-    kpi4.metric("📊 Promedio", money(promedio_factura))
-    
-    kpi5, kpi6, kpi7, kpi8 = st.columns(4)
-    kpi5.metric("🔥 Beneficio", money(beneficio))
-    kpi6.metric("IVA Repercutido", money(iva_repercutido))
-    kpi7.metric("IVA Soportado", money(iva_soportado))
-    kpi8.metric("IVA Neto", money(iva_repercutido - iva_soportado))
-    
+    beneficio_neto_base = base_ingresos - base_gastos
+    promedio_factura = total_ingresos / num_facturas if num_facturas > 0 else 0.0
+
+    iva_repercutido = pd.to_numeric(data_inv.get("vat_amount", pd.Series()), errors="coerce").sum() if not data_inv.empty else 0.0
+    iva_soportado = pd.to_numeric(data_exp.get("vat_amount", pd.Series()), errors="coerce").sum() if not data_exp.empty else 0.0
+    iva_neto = iva_repercutido - iva_soportado
+
+    # Renderizado en tarjetas estructuradas
+    with st.container(border=True):
+        st.caption("💡 **VOLUMEN DE NEGOCIO Y EXPLOTACIÓN (CON IVA)**")
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("🟢 Ingresos Totales", money(total_ingresos))
+        k2.metric("🔴 Gastos Totales", money(total_gastos))
+        k3.metric("📄 Facturas Emitidas", f"{num_facturas} uds.")
+        k4.metric("📊 Ticket Promedio", money(promedio_factura))
+
+        st.markdown("---")
+
+        st.caption("🏛️ **RENDIMIENTO Y LIQUIDACIÓN FISCAL (BASES & IVA)**")
+        k5, k6, k7, k8 = st.columns(4)
+        k5.metric("📈 Beneficio Bruto (Base)", money(beneficio_neto_base))
+        k6.metric("📄 IVA Repercutido", money(iva_repercutido))
+        k7.metric("🧾 IVA Soportado", money(iva_soportado))
+        k8.metric(
+            "💶 IVA Neto",
+            money(iva_neto),
+            delta="A ingresar" if iva_neto > 0 else "A compensar",
+            delta_color="inverse" if iva_neto > 0 else "normal"
+        )
+
+    # Estilos gráficos integrados con Modo Oscuro ERP
+    plt.style.use("dark_background")
+    BG_COLOR = "#0E1117"
+    CARD_BG = "#1E222D"
+    TEXT_COLOR = "#FFFFFF"
+
+    # 📈 Gráfico Principal: Ingresos vs Gastos
     st.markdown("---")
-    st.subheader("📈 Ingresos vs Gastos")
-    
-    if mes_seleccionado == "Todos":
-        ing_mensual = data_inv.groupby(["month_num", "month_name"])["total"].sum().reset_index().sort_values("month_num") if not data_inv.empty else pd.DataFrame(columns=["month_num", "month_name", "total"])
-        gas_mensual = data_exp.groupby(["month_num", "month_name"])["total"].sum().reset_index().sort_values("month_num") if not data_exp.empty else pd.DataFrame(columns=["month_num", "month_name", "total"])
-        meses_todos = pd.DataFrame({"month_num": range(1, 13), "month_name": LISTA_MESES})
-        df_grafico = meses_todos.merge(ing_mensual[["month_num", "total"]].rename(columns={"total": "ingresos"}), on="month_num", how="left").merge(gas_mensual[["month_num", "total"]].rename(columns={"total": "gastos"}), on="month_num", how="left").fillna(0)
+    st.subheader("📈 Comparativa Ingresos vs Gastos")
+
+    if mes_seleccionado == "Todos los meses":
+        ing_mensual = data_inv.groupby(["month_num", "month_name"])["total"].sum().reset_index() if not data_inv.empty else pd.DataFrame(columns=["month_num", "month_name", "total"])
+        gas_mensual = data_exp.groupby(["month_num", "month_name"])["total"].sum().reset_index() if not data_exp.empty else pd.DataFrame(columns=["month_num", "month_name", "total"])
+        
+        meses_df = pd.DataFrame({"month_num": range(1, 13), "month_name": LISTA_MESES})
+        df_grafico = meses_df.merge(ing_mensual[["month_num", "total"]].rename(columns={"total": "ingresos"}), on="month_num", how="left")
+        df_grafico = df_grafico.merge(gas_mensual[["month_num", "total"]].rename(columns={"total": "gastos"}), on="month_num", how="left").fillna(0)
         x_labels = df_grafico["month_name"].tolist()
-        titulo = f"Ingresos vs Gastos {year_seleccionado}"
+        titulo = f"Evolución Mensual {year_seleccionado}"
     else:
         if not data_inv.empty:
             data_inv["day"] = data_inv["date_dt"].dt.day
             ing_diario = data_inv.groupby("day")["total"].sum().reset_index()
         else:
             ing_diario = pd.DataFrame(columns=["day", "total"])
+
         if not data_exp.empty:
             data_exp["day"] = data_exp["date_dt"].dt.day
             gas_diario = data_exp.groupby("day")["total"].sum().reset_index()
         else:
             gas_diario = pd.DataFrame(columns=["day", "total"])
-        dias_todos = pd.DataFrame({"day": range(1, 32)})
-        df_grafico = dias_todos.merge(ing_diario.rename(columns={"total": "ingresos"}), on="day", how="left").merge(gas_diario.rename(columns={"total": "gastos"}), on="day", how="left").fillna(0)
+
+        dias_df = pd.DataFrame({"day": range(1, 32)})
+        df_grafico = dias_df.merge(ing_diario.rename(columns={"total": "ingresos"}), on="day", how="left")
+        df_grafico = df_grafico.merge(gas_diario.rename(columns={"total": "gastos"}), on="day", how="left").fillna(0)
         x_labels = [str(d) for d in df_grafico["day"]]
-        titulo = f"Ingresos vs Gastos {mes_seleccionado} {year_seleccionado}"
-    
+        titulo = f"Evolución Diaria - {mes_seleccionado} {year_seleccionado}"
+
     if not df_grafico.empty:
-        fig, ax = plt.subplots(figsize=(12, 6))
+        fig, ax = plt.subplots(figsize=(12, 4.8), facecolor=BG_COLOR)
+        ax.set_facecolor(CARD_BG)
         x_pos = range(len(x_labels))
-        width = 0.35
+        width = 0.38
+
         if tipo_grafico == "Barras":
-            ax.bar([p - width/2 for p in x_pos], df_grafico["ingresos"], width, label="Ingresos", color="#10B981")
-            ax.bar([p + width/2 for p in x_pos], df_grafico["gastos"], width, label="Gastos", color="#EF4444")
+            ax.bar([p - width/2 for p in x_pos], df_grafico["ingresos"], width, label="Ingresos", color="#10B981", edgecolor="none")
+            ax.bar([p + width/2 for p in x_pos], df_grafico["gastos"], width, label="Gastos", color="#EF4444", edgecolor="none")
         elif tipo_grafico == "Líneas":
-            ax.plot(x_pos, df_grafico["ingresos"], marker="o", label="Ingresos", color="#10B981", linewidth=2)
-            ax.plot(x_pos, df_grafico["gastos"], marker="s", label="Gastos", color="#EF4444", linewidth=2)
+            ax.plot(x_pos, df_grafico["ingresos"], marker="o", label="Ingresos", color="#10B981", linewidth=2.5)
+            ax.plot(x_pos, df_grafico["gastos"], marker="s", label="Gastos", color="#EF4444", linewidth=2.5)
         else:
-            ax.fill_between(x_pos, df_grafico["ingresos"], alpha=0.5, label="Ingresos", color="#10B981")
-            ax.fill_between(x_pos, df_grafico["gastos"], alpha=0.5, label="Gastos", color="#EF4444")
-        ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:,.0f} €"))
+            ax.fill_between(x_pos, df_grafico["ingresos"], alpha=0.4, label="Ingresos", color="#10B981")
+            ax.fill_between(x_pos, df_grafico["gastos"], alpha=0.4, label="Gastos", color="#EF4444")
+
+        ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:,.0f} €".replace(",", ".")))
         ax.set_xticks(x_pos)
-        ax.set_xticklabels(x_labels, rotation=45, ha="right")
-        ax.set_title(titulo, fontweight="bold")
-        ax.legend()
-        ax.grid(axis="y", linestyle="--", alpha=0.7)
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
+        ax.set_xticklabels(x_labels, rotation=35, ha="right", color=TEXT_COLOR, fontsize=9)
+        ax.tick_params(colors=TEXT_COLOR)
+        ax.set_title(titulo, fontweight="bold", fontsize=12, pad=12, color=TEXT_COLOR)
+        ax.legend(facecolor=CARD_BG, edgecolor="none", labelcolor=TEXT_COLOR)
+        ax.grid(axis="y", linestyle="--", alpha=0.2, color="#FFFFFF")
+        
+        for spine in ["top", "right", "left", "bottom"]:
+            ax.spines[spine].set_visible(False)
+            
         fig.tight_layout()
         st.pyplot(fig)
-    
+
+    # 🏆 Subgráficos Secundarios (Top Clientes y Estado de Facturación)
     st.markdown("---")
     col_g1, col_g2 = st.columns(2)
+
     with col_g1:
-        st.subheader("🏆 Top Clientes")
-        if not data_inv.empty and "client_name" in data_inv.columns:
-            top_clientes = data_inv.groupby("client_name")["total"].sum().sort_values(ascending=False).head(5)
+        st.subheader("🏆 Top Clientes por Facturación")
+        col_cliente = "client_name" if "client_name" in data_inv.columns else ("cliente" if "cliente" in data_inv.columns else None)
+        
+        if not data_inv.empty and col_cliente:
+            top_clientes = data_inv.groupby(col_cliente)["total"].sum().sort_values(ascending=False).head(5)
             if not top_clientes.empty:
-                fig2, ax2 = plt.subplots(figsize=(8, 5))
-                ax2.barh(range(len(top_clientes)), top_clientes.values, color="#1E3A8A")
+                fig2, ax2 = plt.subplots(figsize=(7, 4.2), facecolor=BG_COLOR)
+                ax2.set_facecolor(CARD_BG)
+                
+                nombres_cortos = [str(n)[:25] + "..." if len(str(n)) > 25 else str(n) for n in top_clientes.index]
+                bars = ax2.barh(range(len(top_clientes)), top_clientes.values, color="#3B82F6", height=0.55)
+                
                 ax2.set_yticks(range(len(top_clientes)))
-                ax2.set_yticklabels(top_clientes.index, fontsize=10)
+                ax2.set_yticklabels(nombres_cortos, fontsize=9, color=TEXT_COLOR)
                 ax2.invert_yaxis()
-                ax2.set_title("Top 5 Clientes", fontweight="bold")
+                ax2.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:,.0f} €"))
+                ax2.tick_params(colors=TEXT_COLOR)
+                ax2.grid(axis="x", linestyle="--", alpha=0.2, color="#FFFFFF")
+                
+                for spine in ["top", "right", "left", "bottom"]:
+                    ax2.spines[spine].set_visible(False)
+                    
                 fig2.tight_layout()
                 st.pyplot(fig2)
+            else:
+                st.info("Sin registros de clientes en este período.")
+        else:
+            st.info("No se dispone de datos de clientes para este filtro.")
+
     with col_g2:
-        st.subheader("📊 Estados de Facturas")
+        st.subheader("📊 Estado de Facturas")
         if not data_inv.empty and "status" in data_inv.columns:
             estados = data_inv["status"].value_counts()
             if not estados.empty:
-                fig3, ax3 = plt.subplots(figsize=(8, 5))
-                colores = {"pendiente": "#F59E0B", "pagada": "#10B981", "vencida": "#EF4444", "anulada": "#6B7280", "rectificada": "#3B82F6"}
-                colors_list = [colores.get(e, "#6B7280") for e in estados.index]
-                ax3.pie(estados.values, labels=estados.index, autopct='%1.1f%%', colors=colors_list, startangle=90)
-                ax3.set_title("Estado de Facturas", fontweight="bold")
+                fig3, ax3 = plt.subplots(figsize=(7, 4.2), facecolor=BG_COLOR)
+                ax3.set_facecolor(CARD_BG)
+                
+                colores_dict = {
+                    "pagada": "#10B981", 
+                    "pendiente": "#F59E0B", 
+                    "vencida": "#EF4444", 
+                    "anulada": "#6B7280", 
+                    "rectificada": "#3B82F6"
+                }
+                colors_list = [colores_dict.get(str(e).lower(), "#9CA3AF") for e in estados.index]
+                
+                wedges, texts, autotexts = ax3.pie(
+                    estados.values, 
+                    labels=estados.index, 
+                    autopct='%1.1f%%', 
+                    colors=colors_list, 
+                    startangle=90,
+                    textprops=dict(color=TEXT_COLOR)
+                )
+                
+                for autotext in autotexts:
+                    autotext.set_color('#FFFFFF')
+                    autotext.set_weight('bold')
+                    
                 fig3.tight_layout()
                 st.pyplot(fig3)
+            else:
+                st.info("Sin estados de facturación registrados.")
+        else:
+            st.info("No hay columna de estado en las facturas.")
 
 # ════════════════════════════════════════════════════════════
 # PRESUPUESTOS (CORREGIDO - sin fuga de datos)
