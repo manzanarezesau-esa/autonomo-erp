@@ -2565,70 +2565,114 @@ elif menu == "📒 Contabilidad":
 # ════════════════════════════════════════════════════════════
 elif menu == "🏛️ Impuestos Trimestrales":
     st.title("Liquidación Trimestral de IVA e IRPF")
+
     hoy = date.today()
     anio_actual = hoy.year
     mes_actual = hoy.month
-    if mes_actual <= 3: trimestre_actual = "1T (Ene-Mar)"
-    elif mes_actual <= 6: trimestre_actual = "2T (Abr-Jun)"
-    elif mes_actual <= 9: trimestre_actual = "3T (Jul-Sep)"
-    else: trimestre_actual = "4T (Oct-Dic)"
-    
+
+    # ────────────────────────────────────────────────────────
+    # Determinar trimestre actual
+    # ────────────────────────────────────────────────────────
+    if mes_actual <= 3:
+        trimestre_actual = "1T (Ene-Mar)"
+    elif mes_actual <= 6:
+        trimestre_actual = "2T (Abr-Jun)"
+    elif mes_actual <= 9:
+        trimestre_actual = "3T (Jul-Sep)"
+    else:
+        trimestre_actual = "4T (Oct-Dic)"
+
+    # ────────────────────────────────────────────────────────
+    # Selectores de año y trimestre
+    # ────────────────────────────────────────────────────────
     anios_disponibles = list(range(anio_actual - 5, anio_actual + 6))
-    anio = st.selectbox("Año", anios_disponibles, index=5)
-    
-    trimestres = ["1T (Ene-Mar)","2T (Abr-Jun)","3T (Jul-Sep)","4T (Oct-Dic)"]
-    trimestre = st.selectbox("Trimestre", trimestres, index=trimestres.index(trimestre_actual))
-    
-    meses_trim = {
-        "1T (Ene-Mar)": ["Enero","Febrero","Marzo"],
-        "2T (Abr-Jun)": ["Abril","Mayo","Junio"],
-        "3T (Jul-Sep)": ["Julio","Agosto","Septiembre"],
-        "4T (Oct-Dic)": ["Octubre","Noviembre","Diciembre"]
-    }
-    meses = meses_trim[trimestre]
-    inv = get_invoices(user_id)
-    exp = get_expenses(user_id)
-    if not inv.empty:
-        inv["date_dt"] = pd.to_datetime(inv["date"], errors="coerce")
-        inv["year"] = inv["date_dt"].dt.year
-        inv = inv[(inv["year"] == anio) & (inv["month"].isin(meses))]
-    if not exp.empty:
-        exp["date_dt"] = pd.to_datetime(exp["date"], errors="coerce")
-        exp["year"] = exp["date_dt"].dt.year
-        exp = exp[(exp["year"] == anio) & (exp["month"].isin(meses))]
-    base_ventas = inv["base_amount"].sum() if not inv.empty else 0.0
-    iva_repercutido = inv["vat_amount"].sum() if not inv.empty else 0.0
-    base_compras = exp["base_amount"].sum() if not exp.empty else 0.0
-    iva_soportado = exp["vat_amount"].sum() if not exp.empty else 0.0
-    irpf_retenido = inv["irpf_amount"].sum() if not inv.empty else 0.0
-    beneficio_neto = base_ventas - base_compras
-    pago_fraccionado = beneficio_neto * 0.20
-    if pago_fraccionado < 0: pago_fraccionado = 0.0
-    iva_ingresar = max(iva_repercutido - iva_soportado, 0)
-    
+    anio = st.selectbox("Año", anios_disponibles, index=5, key="imp_anio")
+
+    trimestres = ["1T (Ene-Mar)", "2T (Abr-Jun)", "3T (Jul-Sep)", "4T (Oct-Dic)"]
+    trimestre = st.selectbox(
+        "Trimestre",
+        trimestres,
+        index=trimestres.index(trimestre_actual),
+        key="imp_trimestre"
+    )
+
+    # Número de trimestre (1-4) para pasar a fiscal_utils
+    trimestre_num = int(trimestre[0])
+
+    # ────────────────────────────────────────────────────────
+    # Motor fiscal unificado
+    # ────────────────────────────────────────────────────────
+    try:
+        s = calculate_fiscal_summary(
+            get_invoices(user_id),
+            get_expenses(user_id),
+            year=anio,
+            quarter=trimestre_num
+        )
+    except Exception as e:
+        st.error(f"Error al calcular el resumen trimestral: {e}")
+        st.stop()
+
+    # ────────────────────────────────────────────────────────
+    # Extraer valores (mismos nombres que antes para el 303)
+    # ────────────────────────────────────────────────────────
+    base_ventas     = s["base_ventas"]
+    iva_repercutido = s["iva_repercutido"]
+    base_compras    = s["base_gastos"]
+    iva_soportado   = s["iva_soportado"]
+    irpf_retenido   = s["irpf_ventas"]
+    beneficio_neto  = s["beneficio_bruto"]
+    pago_fraccionado = s["provision_irpf"]  # 20 % o retención, según corresponda
+    iva_ingresar    = max(s["iva_neto"], 0.0)
+
+    # ────────────────────────────────────────────────────────
+    # Resumen principal
+    # ────────────────────────────────────────────────────────
     st.subheader(f"Resumen {trimestre} {anio}")
-    col1,col2,col3 = st.columns(3)
+
+    col1, col2, col3 = st.columns(3)
     col1.metric("Ventas (base)", money(base_ventas))
     col2.metric("IVA repercutido", money(iva_repercutido))
     col3.metric("IRPF retenido", money(irpf_retenido))
-    col4,col5,col6 = st.columns(3)
+
+    col4, col5, col6 = st.columns(3)
     col4.metric("Compras (base)", money(base_compras))
     col5.metric("IVA soportado", money(iva_soportado))
-    col6.metric("IVA a ingresar", money(iva_ingresar))
+    col6.metric(
+        "IVA a ingresar",
+        money(iva_ingresar),
+        delta="A compensar" if s["iva_neto"] < 0 else None,
+        delta_color="off"
+    )
+
     st.markdown("---")
     st.subheader("Pago fraccionado IRPF")
-    col7,col8,col9 = st.columns(3)
+
+    modo_label = {
+        "retencion_cliente": "Retención cliente",
+        "pago_fraccionado_20": "20 % modelo 130",
+        "sin_retencion": "Sin provisión",
+    }.get(s["modo_provision"], "—")
+
+    col7, col8, col9 = st.columns(3)
     col7.metric("Beneficio neto", money(beneficio_neto))
-    col8.metric("% aplicado", "20 %")
+    col8.metric("% aplicado", modo_label)
     col9.metric("💶 Pago fraccionado", money(pago_fraccionado))
-    
+
+    st.caption(f"💡 Provisión IRPF calculada como: **{modo_label}**")
+
     st.markdown("---")
     st.subheader("📄 Modelo 303")
-    
+
     if st.button("Generar Modelo 303"):
-        # CORRECCIÓN FUGA DE DATOS: sin AUTONOMO_TAX_ID ni AUTONOMO_NAME
+        # Cargar NIF/nombre del emisor desde settings (sin fuga de datos)
         try:
-            config_res = supabase.table("settings").select("company_tax_id, company_name").eq("user_id", user_id).execute()
+            config_res = (
+                supabase.table("settings")
+                .select("company_tax_id, company_name")
+                .eq("user_id", user_id)
+                .execute()
+            )
             if config_res.data and len(config_res.data) > 0:
                 nif_emisor = config_res.data[0].get("company_tax_id", "")
                 nombre_emisor = config_res.data[0].get("company_name", "")
@@ -2638,10 +2682,10 @@ elif menu == "🏛️ Impuestos Trimestrales":
         except Exception:
             nif_emisor = ""
             nombre_emisor = ""
-        
+
         st.markdown("### Opciones de descarga")
         col_desc1, col_desc2 = st.columns(2)
-        
+
         with col_desc1:
             st.markdown("**📄 Borrador PDF**")
             try:
@@ -2651,10 +2695,16 @@ elif menu == "🏛️ Impuestos Trimestrales":
                     beneficio_neto, pago_fraccionado, iva_ingresar
                 )
                 if pdf_bytes_303:
-                    st.download_button("⬇️ Descargar PDF", pdf_bytes_303, f"Modelo_303_{anio}_{trimestre.replace(' ','')}.pdf", mime="application/pdf", key="descargar_pdf_303")
+                    st.download_button(
+                        "⬇️ Descargar PDF",
+                        pdf_bytes_303,
+                        f"Modelo_303_{anio}_{trimestre.replace(' ','')}.pdf",
+                        mime="application/pdf",
+                        key="descargar_pdf_303"
+                    )
             except Exception as e:
                 st.error(f"Error: {e}")
-        
+
         with col_desc2:
             st.markdown("**💻 Fichero AEAT**")
             try:
@@ -2662,7 +2712,13 @@ elif menu == "🏛️ Impuestos Trimestrales":
                     anio, trimestre, base_ventas, iva_repercutido,
                     base_compras, iva_soportado, nif_emisor, nombre_emisor
                 )
-                st.download_button("⬇️ Descargar fichero", fichero_completo.encode('utf-8'), f"303_{anio}_{trimestre.replace(' ','')}.txt", mime="text/plain", key="descargar_fichero_303")
+                st.download_button(
+                    "⬇️ Descargar fichero",
+                    fichero_completo.encode('utf-8'),
+                    f"303_{anio}_{trimestre.replace(' ','')}.txt",
+                    mime="text/plain",
+                    key="descargar_fichero_303"
+                )
                 es_valido, mensaje = validar_fichero_aeat(fichero_completo)
                 if es_valido:
                     st.success(mensaje)
