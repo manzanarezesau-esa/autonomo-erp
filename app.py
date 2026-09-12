@@ -28,6 +28,7 @@ from data_service import (
     get_invoices, get_clients, get_suppliers, get_products, get_expenses,
     get_bank_transactions, get_recurring_invoices, get_budgets, get_journal_entries
 )
+from fiscal_utils import calculate_fiscal_summary      # ← NUEVO
 from certificate_manager import (
     guardar_certificado_usuario, obtener_certificado_usuario,
     eliminar_certificado_usuario, tiene_certificado
@@ -271,81 +272,95 @@ if menu == "🏠 Salpicadero":
         <p style="text-align: center; color: #4a5568; font-size: 18px;">Resumen de tu negocio</p>
     </div>
     """, unsafe_allow_html=True)
+
     st.write(f"📅 Hoy es {date.today().strftime('%d/%m/%Y')}  |  Bienvenido, {st.session_state.user.email}")
 
     hoy = date.today()
     mes_actual = hoy.month
     anio_actual = hoy.year
 
-    periodo = st.selectbox("📅 Período", ["Mes actual", "Trimestre actual", "Año actual", "Todo"], index=0)
+    periodo = st.selectbox(
+        "📅 Período",
+        ["Mes actual", "Trimestre actual", "Año actual", "Todo"],
+        index=0,
+        key="salpicadero_periodo"
+    )
 
-    inv = get_invoices(user_id)
-    exp = get_expenses(user_id)
-
-    if not inv.empty:
-        inv["date_dt"] = pd.to_datetime(inv["date"], errors="coerce")
-        inv["year"] = inv["date_dt"].dt.year
-    if not exp.empty:
-        exp["date_dt"] = pd.to_datetime(exp["date"], errors="coerce")
-        exp["year"] = exp["date_dt"].dt.year
-
+    # ────────────────────────────────────────────────────────
+    # Construcción del filtro de período
+    # ────────────────────────────────────────────────────────
+    kwargs_filtro = {"year": anio_actual}
     if periodo == "Mes actual":
-        if not inv.empty:
-            inv = inv[(inv["year"] == anio_actual) & (inv["month"] == LISTA_MESES[mes_actual-1])]
-        if not exp.empty:
-            exp = exp[(exp["year"] == anio_actual) & (exp["month"] == LISTA_MESES[mes_actual-1])]
+        kwargs_filtro["month"] = mes_actual
     elif periodo == "Trimestre actual":
-        if mes_actual <= 3:
-            meses_trim = ["Enero", "Febrero", "Marzo"]
-        elif mes_actual <= 6:
-            meses_trim = ["Abril", "Mayo", "Junio"]
-        elif mes_actual <= 9:
-            meses_trim = ["Julio", "Agosto", "Septiembre"]
-        else:
-            meses_trim = ["Octubre", "Noviembre", "Diciembre"]
-        if not inv.empty:
-            inv = inv[(inv["year"] == anio_actual) & (inv["month"].isin(meses_trim))]
-        if not exp.empty:
-            exp = exp[(exp["year"] == anio_actual) & (exp["month"].isin(meses_trim))]
-    elif periodo == "Año actual":
-        if not inv.empty:
-            inv = inv[inv["year"] == anio_actual]
-        if not exp.empty:
-            exp = exp[exp["year"] == anio_actual]
+        kwargs_filtro["quarter"] = (mes_actual - 1) // 3 + 1
+    elif periodo == "Todo":
+        kwargs_filtro = {}  # sin filtro: todo el histórico
 
-    bv = pd.to_numeric(inv["base_amount"], errors="coerce").sum() if not inv.empty else 0.0
-    bg = pd.to_numeric(exp["base_amount"], errors="coerce").sum() if not exp.empty else 0.0
-    ben = bv - bg
-    iva_dev = pd.to_numeric(inv["vat_amount"], errors="coerce").sum() if not inv.empty else 0.0
-    iva_sop = pd.to_numeric(exp["vat_amount"], errors="coerce").sum() if not exp.empty else 0.0
-    iva_pagar = max(iva_dev - iva_sop, 0.0)
-    irpf_total = pd.to_numeric(inv["irpf_amount"], errors="coerce").sum() if not inv.empty else 0.0
-    pago_frac = ben * 0.20 if ben > 0 else 0.0
-    
-    # ══════════════════════════════════════════════════════════
-    # CORRECCIÓN: El IVA NO es un gasto real del negocio
-    # Solo restamos el pago fraccionado IRPF y el IRPF retenido
-    # ══════════════════════════════════════════════════════════
-    ganancia_neta = ben - pago_frac - irpf_total
+    # ────────────────────────────────────────────────────────
+    # Motor fiscal unificado
+    # ────────────────────────────────────────────────────────
+    try:
+        s = calculate_fiscal_summary(
+            get_invoices(user_id),
+            get_expenses(user_id),
+            **kwargs_filtro
+        )
+    except Exception as e:
+        st.error(f"Error al calcular el resumen fiscal: {e}")
+        st.stop()
 
+    # ────────────────────────────────────────────────────────
+    # Métricas principales
+    # ────────────────────────────────────────────────────────
     c1, c2, c3 = st.columns(3)
-    c1.metric("Ingresos", money(bv))
-    c2.metric("Gastos", money(bg))
-    c3.metric("Beneficio bruto", money(ben))
-    st.markdown("---")
-    c4, c5, c6 = st.columns(3)
-    c4.metric("Provisión IVA (informativo)", f"-{money(iva_pagar)}")
-    c5.metric("IRPF (retenido)", f"-{money(irpf_total)}")
-    c6.metric("Pago fraccionado IRPF (20%)", f"-{money(pago_frac)}")
-    st.metric("🔥 GANANCIA NETA (después de impuestos)", money(ganancia_neta))
+    c1.metric("Ingresos", money(s["base_ventas"]))
+    c2.metric("Gastos", money(s["base_gastos"]))
+    c3.metric("Beneficio bruto", money(s["beneficio_bruto"]))
 
     st.markdown("---")
-    num_facturas = len(inv) if not inv.empty else 0
-    num_gastos = len(exp) if not exp.empty else 0
+
+    # ────────────────────────────────────────────────────────
+    # Impuestos y resultado neto
+    # ────────────────────────────────────────────────────────
+    c4, c5, c6 = st.columns(3)
+
+    iva_neto_display = max(s["iva_neto"], 0.0)
+    c4.metric(
+        "Provisión IVA (informativo)",
+        f"-{money(iva_neto_display)}",
+        help="IVA repercutido - IVA soportado. Si es negativo, tienes IVA a compensar."
+    )
+
+    modo_label = {
+        "retencion_cliente": "Retención cliente",
+        "pago_fraccionado_20": "Pago fraccionado 20%",
+        "sin_retencion": "Sin provisión",
+    }.get(s["modo_provision"], s["modo_provision"])
+
+    c5.metric(
+        "Provisión IRPF",
+        f"-{money(s['provision_irpf'])}",
+        help=f"Modo: {modo_label}"
+    )
+    c6.metric("Nº operaciones", s["total_operaciones"])
+
+    st.metric(
+        "🔥 GANANCIA NETA (después de impuestos)",
+        money(s["ganancia_neta"])
+    )
+
+    st.caption(f"💡 Provisión IRPF calculada como: **{modo_label}**")
+
+    st.markdown("---")
+
+    # ────────────────────────────────────────────────────────
+    # Contadores secundarios
+    # ────────────────────────────────────────────────────────
     col_f1, col_f2, col_f3 = st.columns(3)
-    col_f1.metric("Facturas emitidas", num_facturas)
-    col_f2.metric("Gastos registrados", num_gastos)
-    col_f3.metric("Promedio por factura", money(bv/num_facturas) if num_facturas > 0 else "0.00 €")
+    col_f1.metric("Facturas emitidas", s["num_invoices"])
+    col_f2.metric("Gastos registrados", s["num_expenses"])
+    col_f3.metric("Promedio por factura", money(s["ticket_promedio"]))
 # ════════════════════════════════════════════════════════════
 # CLIENTES
 # ════════════════════════════════════════════════════════════
