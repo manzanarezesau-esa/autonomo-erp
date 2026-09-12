@@ -28,7 +28,7 @@ from data_service import (
     get_invoices, get_clients, get_suppliers, get_products, get_expenses,
     get_bank_transactions, get_recurring_invoices, get_budgets, get_journal_entries
 )
-from fiscal_utils import calculate_fiscal_summary      # ← NUEVO
+from fiscal_utils import calculate_fiscal_summary, filter_by_period      # ← NUEVO
 from certificate_manager import (
     guardar_certificado_usuario, obtener_certificado_usuario,
     eliminar_certificado_usuario, tiene_certificado
@@ -2348,29 +2348,43 @@ elif menu == "📖 Libro Contable General":
 # ════════════════════════════════════════════════════════════
 elif menu == "📒 Contabilidad":
     st.title("Contabilidad de doble partida")
-    submenu = st.radio("Seleccionar informe", ["Libro Diario", "Mayor", "PyG y Balance"], horizontal=True)
+    submenu = st.radio(
+        "Seleccionar informe",
+        ["Libro Diario", "Mayor", "PyG y Balance"],
+        horizontal=True,
+        key="contabilidad_submenu"
+    )
     st.markdown("---")
 
+    # ────────────────────────────────────────────────────────
+    # LIBRO DIARIO
+    # ────────────────────────────────────────────────────────
     if submenu == "Libro Diario":
         entries = get_journal_entries(user_id)
         if not entries.empty:
             entry_id = st.selectbox(
-                "Selecciona un asiento contable", 
+                "Selecciona un asiento contable",
                 entries["id"].tolist(),
-                format_func=lambda x: f"📅 {entries[entries['id']==x]['date'].values[0]} — {entries[entries['id']==x]['description'].values[0]}"
+                format_func=lambda x: f"📅 {entries[entries['id']==x]['date'].values[0]} — {entries[entries['id']==x]['description'].values[0]}",
+                key="diario_entry_id"
             )
             try:
                 lineas = supabase.table("journal_entry_lines").select("*").eq("journal_entry_id", entry_id).execute()
                 lineas_df = pd.DataFrame(lineas.data) if lineas.data else pd.DataFrame()
-                
+
                 if not lineas_df.empty:
                     column_config = {
                         "account": st.column_config.TextColumn("Cuenta", width="medium"),
                         "debit": st.column_config.NumberColumn("Debe", format="%.2f €", width="small"),
                         "credit": st.column_config.NumberColumn("Haber", format="%.2f €", width="small"),
-                        "description": st.column_config.TextColumn("Concepto", width="large")
+                        "description": st.column_config.TextColumn("Concepto", width="large"),
                     }
-                    st.dataframe(lineas_df[["account", "debit", "credit", "description"]], hide_index=True, use_container_width=True, column_config=column_config)
+                    st.dataframe(
+                        lineas_df[["account", "debit", "credit", "description"]],
+                        hide_index=True,
+                        use_container_width=True,
+                        column_config=column_config
+                    )
                 else:
                     st.info("El asiento no contiene líneas contables.")
             except Exception as e:
@@ -2378,6 +2392,9 @@ elif menu == "📒 Contabilidad":
         else:
             st.info("Aún no hay asientos contables registrados.")
 
+    # ────────────────────────────────────────────────────────
+    # MAYOR
+    # ────────────────────────────────────────────────────────
     elif submenu == "Mayor":
         try:
             entries_user = supabase.table("journal_entries").select("id").eq("user_id", user_id).execute()
@@ -2387,151 +2404,162 @@ elif menu == "📒 Contabilidad":
                 cuentas_df = pd.DataFrame(cuentas.data) if cuentas.data else pd.DataFrame()
             else:
                 cuentas_df = pd.DataFrame()
-                
+
             if not cuentas_df.empty:
                 col_sel, col_sal = st.columns([2, 1])
                 with col_sel:
-                    cuenta_sel = st.selectbox("Selecciona la cuenta contable", sorted(cuentas_df["account"].unique()))
-                
+                    cuenta_sel = st.selectbox(
+                        "Selecciona la cuenta contable",
+                        sorted(cuentas_df["account"].unique()),
+                        key="mayor_cuenta"
+                    )
+
                 movs = supabase.table("journal_entry_lines").select("*, journal_entries(date)").in_("journal_entry_id", entry_ids).eq("account", cuenta_sel).execute()
                 movs_df = pd.DataFrame(movs.data) if movs.data else pd.DataFrame()
-                
+
                 if not movs_df.empty:
-                    movs_df["date"] = movs_df["journal_entries"].apply(lambda x: x["date"] if isinstance(x, dict) else "")
+                    movs_df["date"] = movs_df["journal_entries"].apply(
+                        lambda x: x["date"] if isinstance(x, dict) else ""
+                    )
                     movs_df["date"] = pd.to_datetime(movs_df["date"]).dt.strftime("%d/%m/%Y")
-                    
+
                     saldo = movs_df["debit"].sum() - movs_df["credit"].sum()
                     with col_sal:
                         st.metric("Saldo Acumulado", money(saldo))
-                    
+
                     column_config = {
                         "date": st.column_config.TextColumn("Fecha", width="small"),
                         "description": st.column_config.TextColumn("Concepto", width="large"),
                         "debit": st.column_config.NumberColumn("Debe", format="%.2f €", width="small"),
-                        "credit": st.column_config.NumberColumn("Haber", format="%.2f €", width="small")
+                        "credit": st.column_config.NumberColumn("Haber", format="%.2f €", width="small"),
                     }
-                    st.dataframe(movs_df[["date", "description", "debit", "credit"]], hide_index=True, use_container_width=True, column_config=column_config)
+                    st.dataframe(
+                        movs_df[["date", "description", "debit", "credit"]],
+                        hide_index=True,
+                        use_container_width=True,
+                        column_config=column_config
+                    )
             else:
                 st.info("Sin movimientos registrados en el mayor.")
         except Exception as e:
             st.error(f"Error al cargar el libro mayor: {e}")
 
-   elif submenu == "PyG y Balance":
-    st.subheader("📊 Cuenta de Pérdidas y Ganancias (PyG)")
-
-    inv = get_invoices(user_id)
-    exp = get_expenses(user_id)
-
     # ────────────────────────────────────────────────────────
-    # Detectar años disponibles (sin modificar los DataFrames originales)
+    # PyG Y BALANCE
     # ────────────────────────────────────────────────────────
-    anios_disponibles = set()
-    if not inv.empty and "date" in inv.columns:
-        _inv_years = pd.to_datetime(inv["date"], errors="coerce").dt.year.dropna()
-        anios_disponibles.update(_inv_years.astype(int).unique())
-    if not exp.empty and "date" in exp.columns:
-        _exp_years = pd.to_datetime(exp["date"], errors="coerce").dt.year.dropna()
-        anios_disponibles.update(_exp_years.astype(int).unique())
+    elif submenu == "PyG y Balance":
+        st.subheader("📊 Cuenta de Pérdidas y Ganancias (PyG)")
 
-    if not anios_disponibles:
-        st.info("No hay datos contables para mostrar informes.")
-    else:
-        anios_disponibles = sorted(anios_disponibles, reverse=True)
+        inv = get_invoices(user_id)
+        exp = get_expenses(user_id)
 
-        col_filtro, _ = st.columns([1, 2])
-        with col_filtro:
-            anio_sel = st.selectbox(
-                "📅 Ejercicio Fiscal",
-                anios_disponibles,
-                index=0,
-                key="pyg_anio"
-            )
+        # Detectar años disponibles (sin modificar los DataFrames originales)
+        anios_disponibles = set()
+        if not inv.empty and "date" in inv.columns:
+            _inv_years = pd.to_datetime(inv["date"], errors="coerce").dt.year.dropna()
+            anios_disponibles.update(_inv_years.astype(int).unique())
+        if not exp.empty and "date" in exp.columns:
+            _exp_years = pd.to_datetime(exp["date"], errors="coerce").dt.year.dropna()
+            anios_disponibles.update(_exp_years.astype(int).unique())
 
-        # ────────────────────────────────────────────────────
-        # Motor fiscal unificado
-        # ────────────────────────────────────────────────────
-        s = calculate_fiscal_summary(inv, exp, year=anio_sel)
-
-        # ────────────────────────────────────────────────────
-        # Desglose de gastos por tipo (para el panel izquierdo)
-        # ────────────────────────────────────────────────────
-        exp_f = filter_by_period(exp, year=anio_sel) if not exp.empty else pd.DataFrame()
-
-        if not exp_f.empty and "expense_type" in exp_f.columns:
-            gastos_por_tipo = exp_f.groupby("expense_type")["base_amount"].sum()
+        if not anios_disponibles:
+            st.info("No hay datos contables para mostrar informes.")
         else:
-            gastos_por_tipo = pd.Series(dtype=float)
+            anios_disponibles = sorted(anios_disponibles, reverse=True)
 
-        # ────────────────────────────────────────────────────
-        # Layout principal: desglose + resultados
-        # ────────────────────────────────────────────────────
-        col1, col2 = st.columns([1.2, 1])
-
-        with col1:
-            with st.container(border=True):
-                st.markdown("### 📥 Desglose Explotación")
-                st.write(f"🟢 **Ventas y Servicios:** {money(s['base_ventas'])}")
-                st.markdown("---")
-                st.markdown("**🔴 Gastos Deducibles por Categoría:**")
-                if not gastos_por_tipo.empty:
-                    for tipo, importe in gastos_por_tipo.items():
-                        st.write(f"• **{tipo}:** {money(importe)}")
-                else:
-                    st.write("Sin gastos registrados.")
-                st.markdown("---")
-                st.write(f"**Total Gastos Deducibles:** {money(s['base_gastos'])}")
-
-        with col2:
-            with st.container(border=True):
-                st.markdown("### 📈 Resultados del Ejercicio")
-                st.metric("Resultado Bruto (PyG)", money(s["beneficio_bruto"]))
-                st.caption("Beneficio antes de impuestos (Base Imponible)")
-                st.markdown("---")
-
-                # Provisión IRPF unificada
-                modo_label = {
-                    "retencion_cliente": "IRPF Retenido en Facturas",
-                    "pago_fraccionado_20": "Pago Fraccionado IRPF (20%)",
-                    "sin_retencion": "Sin provisión IRPF",
-                }.get(s["modo_provision"], "Provisión IRPF")
-
-                st.metric(
-                    modo_label,
-                    f"-{money(s['provision_irpf'])}",
-                    help=f"Modo aplicado: {s['modo_provision']}"
+            col_filtro, _ = st.columns([1, 2])
+            with col_filtro:
+                anio_sel = st.selectbox(
+                    "📅 Ejercicio Fiscal",
+                    anios_disponibles,
+                    index=0,
+                    key="pyg_anio"
                 )
 
-                st.markdown("---")
-                st.metric("🔥 GANANCIA NETA ESTIMADA", money(s["ganancia_neta"]))
+            # ────────────────────────────────────────────────
+            # Motor fiscal unificado
+            # ────────────────────────────────────────────────
+            s = calculate_fiscal_summary(inv, exp, year=anio_sel)
 
-        # ────────────────────────────────────────────────────
-        # Balance resumido
-        # ────────────────────────────────────────────────────
-        st.markdown("---")
-        st.subheader("⚖️ Balance de Situación (resumido)")
+            # ────────────────────────────────────────────────
+            # Desglose de gastos por tipo
+            # ────────────────────────────────────────────────
+            exp_f = filter_by_period(exp, year=anio_sel) if not exp.empty else pd.DataFrame()
 
-        activo_corriente = s["total_ventas"]
-        pasivo_corriente = s["total_gastos"]
-        patrimonio_neto = activo_corriente - pasivo_corriente
+            if not exp_f.empty and "expense_type" in exp_f.columns:
+                gastos_por_tipo = exp_f.groupby("expense_type")["base_amount"].sum()
+            else:
+                gastos_por_tipo = pd.Series(dtype=float)
 
-        col_b1, col_b2, col_b3 = st.columns([1.1, 1.1, 1.4])
-        col_b1.metric(
-            "Activo Corriente",
-            money(activo_corriente),
-            help="Facturación total acumulada con IVA"
-        )
-        col_b2.metric(
-            "Pasivo Corriente",
-            money(pasivo_corriente),
-            help="Gastos totales acumulados con IVA"
-        )
-        col_b3.metric(
-            "Patrimonio Neto",
-            money(patrimonio_neto),
-            help="Activo total menos Pasivo total"
-        )
+            # ────────────────────────────────────────────────
+            # Layout: desglose + resultados
+            # ────────────────────────────────────────────────
+            col1, col2 = st.columns([1.2, 1])
 
-        st.caption("💡 *El Balance resumido muestra el saldo de liquidez bruta (Bases + IVA) registrado en el ejercicio.*")
+            with col1:
+                with st.container(border=True):
+                    st.markdown("### 📥 Desglose Explotación")
+                    st.write(f"🟢 **Ventas y Servicios:** {money(s['base_ventas'])}")
+                    st.markdown("---")
+                    st.markdown("**🔴 Gastos Deducibles por Categoría:**")
+                    if not gastos_por_tipo.empty:
+                        for tipo, importe in gastos_por_tipo.items():
+                            st.write(f"• **{tipo}:** {money(importe)}")
+                    else:
+                        st.write("Sin gastos registrados.")
+                    st.markdown("---")
+                    st.write(f"**Total Gastos Deducibles:** {money(s['base_gastos'])}")
+
+            with col2:
+                with st.container(border=True):
+                    st.markdown("### 📈 Resultados del Ejercicio")
+                    st.metric("Resultado Bruto (PyG)", money(s["beneficio_bruto"]))
+                    st.caption("Beneficio antes de impuestos (Base Imponible)")
+                    st.markdown("---")
+
+                    modo_label = {
+                        "retencion_cliente": "IRPF Retenido en Facturas",
+                        "pago_fraccionado_20": "Pago Fraccionado IRPF (20%)",
+                        "sin_retencion": "Sin provisión IRPF",
+                    }.get(s["modo_provision"], "Provisión IRPF")
+
+                    st.metric(
+                        modo_label,
+                        f"-{money(s['provision_irpf'])}",
+                        help=f"Modo aplicado: {s['modo_provision']}"
+                    )
+
+                    st.markdown("---")
+                    st.metric("🔥 GANANCIA NETA ESTIMADA", money(s["ganancia_neta"]))
+
+            # ────────────────────────────────────────────────
+            # Balance resumido
+            # ────────────────────────────────────────────────
+            st.markdown("---")
+            st.subheader("⚖️ Balance de Situación (resumido)")
+
+            activo_corriente = s["total_ventas"]
+            pasivo_corriente = s["total_gastos"]
+            patrimonio_neto = activo_corriente - pasivo_corriente
+
+            col_b1, col_b2, col_b3 = st.columns([1.1, 1.1, 1.4])
+            col_b1.metric(
+                "Activo Corriente",
+                money(activo_corriente),
+                help="Facturación total acumulada con IVA"
+            )
+            col_b2.metric(
+                "Pasivo Corriente",
+                money(pasivo_corriente),
+                help="Gastos totales acumulados con IVA"
+            )
+            col_b3.metric(
+                "Patrimonio Neto",
+                money(patrimonio_neto),
+                help="Activo total menos Pasivo total"
+            )
+
+            st.caption("💡 *El Balance resumido muestra el saldo de liquidez bruta (Bases + IVA) registrado en el ejercicio.*")
 # ════════════════════════════════════════════════════════════
 # IMPUESTOS TRIMESTRALES (CORREGIDO - sin fuga de datos)
 # ════════════════════════════════════════════════════════════
