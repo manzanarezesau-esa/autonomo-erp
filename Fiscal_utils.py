@@ -1,5 +1,5 @@
 # ════════════════════════════════════════════════════════════
-# fISCAL_UTILS.PY — SINGLE SOURCE OF TRUTH (CÁLCULOS FISCALES)
+# FISCAL_UTILS.PY — SINGLE SOURCE OF TRUTH (CÁLCULOS FISCALES)
 # ════════════════════════════════════════════════════════════
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict, Any, Optional, Union
