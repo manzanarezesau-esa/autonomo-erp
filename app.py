@@ -867,6 +867,875 @@ elif menu == "📦 Productos":
         st.dataframe(productos_display, hide_index=True, use_container_width=True)
     else:
         st.info("No hay productos en el catálogo.")
+# app.py
+import streamlit as st
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+from datetime import datetime, date, timedelta
+import json
+import time
+import io
+
+# Validación
+from validators import validar_nif_cif, validar_iban
+from formatters import money
+
+# Módulos propios
+from config import LISTA_MESES, AUTONOMO_NAME, AUTONOMO_TAX_ID, AUTONOMO_ADDRESS, AUTONOMO_IBAN, TIPOS_GASTO
+from database import (
+    init_supabase,
+    obtener_siguiente_numero_factura, obtener_siguiente_numero_presupuesto,
+    crear_factura_con_rollback, crear_gasto_con_rollback,
+    auditar_factura
+)
+from pdf_utils import make_invoice_pdf_from_template, make_budget_pdf
+from email_utils import enviar_factura_email
+from banking import iniciar_conexion_gocardless, completar_importacion, obtener_token_gocardless, obtener_bancos_disponibles
+from auth_utils import login_user, register_user, reset_password, logout, APP_URL
+from data_service import (
+    get_invoices, get_clients, get_suppliers, get_products, get_expenses,
+    get_bank_transactions, get_recurring_invoices, get_budgets, get_journal_entries
+)
+from fiscal_utils import (
+    calculate_fiscal_summary,
+    filter_by_period,
+    get_filtered_dataframes,
+)      # ← NUEVO
+from certificate_manager import (
+    guardar_certificado_usuario, obtener_certificado_usuario,
+    eliminar_certificado_usuario, tiene_certificado
+)
+from stripe_utils import (
+    obtener_suscripcion_usuario, crear_checkout_session,
+    cancelar_suscripcion, verificar_acceso, procesar_success_url,
+    obtener_historial_pagos
+)
+from modelo303_utils import generar_pdf_303, generar_fichero_aeat_303, validar_fichero_aeat
+from facturae_utils import generar_facturae_xml
+
+st.set_page_config(page_title="Hondureformas ERP", page_icon="🏗️", layout="wide")
+
+# Inicializar Supabase (cacheado)
+if "supabase" not in st.session_state:
+    st.session_state.supabase = init_supabase()
+supabase = st.session_state.supabase
+
+# Estado de sesión
+if "user" not in st.session_state:
+    st.session_state.user = None
+    st.session_state.access_token = None
+    st.session_state.user_id = None
+
+# Intentar restaurar sesión activa
+try:
+    if st.session_state.user is None:
+        session = supabase.auth.get_session()
+        if session and getattr(session, "user", None):
+            st.session_state.user = session.user
+            st.session_state.access_token = session.access_token
+            user_meta = supabase.auth.get_user()
+            if user_meta and user_meta.user:
+                st.session_state.user_id = user_meta.user.id
+except Exception:
+    pass
+
+# Procesar URL de éxito de Stripe si existe
+if st.session_state.user is not None and "session_id" in st.query_params:
+    procesar_success_url()
+
+# ------------------------------------------------------------
+# PANTALLA DE LOGIN / REGISTRO / RECUPERACIÓN
+# ------------------------------------------------------------
+if st.session_state.user is None:
+    query_params = st.query_params
+    if ("type" in query_params and query_params["type"] == "recovery") or "access_token" in query_params:
+        st.title("🔐 Establecer nueva contraseña")
+        with st.form("reset_password"):
+            new_password = st.text_input("Nueva contraseña", type="password")
+            confirm_password = st.text_input("Confirmar nueva contraseña", type="password")
+            if st.form_submit_button("Cambiar contraseña"):
+                if new_password != confirm_password:
+                    st.error("Las contraseñas no coinciden.")
+                elif len(new_password) < 6:
+                    st.error("La contraseña debe tener al menos 6 caracteres.")
+                else:
+                    try:
+                        if "access_token" in query_params:
+                            supabase.auth.set_session(
+                                query_params["access_token"],
+                                query_params.get("refresh_token", "")
+                            )
+                        supabase.auth.update_user({"password": new_password})
+                        st.success("¡Contraseña actualizada! Ya puedes iniciar sesión.")
+                        st.query_params.clear()
+                        time.sleep(1)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error al restablecer la contraseña: {e}")
+        st.stop()
+
+    st.title("🏗️ Bienvenid@ a Hondureformas Contable")
+    tab1, tab2, tab3 = st.tabs(["Iniciar Sesión", "Crear Cuenta", "Olvidé mi contraseña"])
+
+    with tab1:
+        with st.form("login"):
+            email = st.text_input("Email", key="login_email")
+            pwd = st.text_input("Contraseña", type="password", key="login_pwd")
+            if st.form_submit_button("Entrar"):
+                email = (email or "").strip()
+                pwd = (pwd or "").strip()
+                if not email or not pwd or "@" not in email or "." not in email:
+                    st.error("Credenciales inválidas.")
+                else:
+                    if login_user(email, pwd, supabase):
+                        st.rerun()
+
+    with tab2:
+        with st.form("register"):
+            new_email = st.text_input("Email", key="register_email")
+            new_pwd = st.text_input("Contraseña (mín. 6 caracteres)", type="password", key="register_pwd")
+            if st.form_submit_button("Registrarse"):
+                new_email = (new_email or "").strip()
+                new_pwd = (new_pwd or "").strip()
+                if not new_email or "@" not in new_email or "." not in new_email:
+                    st.error("Email inválido.")
+                elif len(new_pwd) < 6 or len(new_pwd) > 72:
+                    st.error("La contraseña debe tener entre 6 y 72 caracteres.")
+                else:
+                    if register_user(new_email, new_pwd, supabase):
+                        st.rerun()
+
+    with tab3:
+        st.subheader("Recuperar acceso")
+        with st.form("forgot_password"):
+            recovery_email = st.text_input("Email de la cuenta", key="recovery_email")
+            if st.form_submit_button("Enviar enlace de recuperación"):
+                recovery_email = (recovery_email or "").strip()
+                if not recovery_email or "@" not in recovery_email:
+                    st.error("Introduce un email válido.")
+                else:
+                    reset_password(recovery_email, supabase)
+    st.stop()
+
+# ------------------------------------------------------------
+# BARRA LATERAL
+# ------------------------------------------------------------
+logo_url = None
+try:
+    config_res = supabase.table("settings").select("company_logo").eq("user_id", st.session_state.user_id).execute()
+    if config_res.data:
+        logo_url = config_res.data[0].get("company_logo")
+except Exception:
+    pass
+
+with st.sidebar:
+    if logo_url:
+        st.image(logo_url, width=180)
+    else:
+        st.markdown("""
+        <div style="width:80px;height:80px;background-color:#1E3A8A;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 10px auto;">
+            <span style="color:white;font-size:42px;font-weight:bold;">H</span>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <h2 style='text-align:center;color:#1E3A8A;margin-top:0;'>Hondureformas ERP</h2>
+    <p style='text-align:center;color:#4a5568;font-size:14px;'>Gestión contable para autónomos</p>
+    """, unsafe_allow_html=True)
+
+    st.markdown("---")
+    st.write(f"👤 {st.session_state.user.email}")
+    
+    user_id_actual = st.session_state.get("user_id")
+    
+    if user_id_actual:
+        try:
+            suscripcion = obtener_suscripcion_usuario(user_id_actual)
+            plan_actual = suscripcion.get("plan", "free") if suscripcion else "free"
+        except Exception:
+            plan_actual = "free"
+    else:
+        plan_actual = "free"
+    
+    iconos_plan = {
+        "free": "🆓 Gratis",
+        "basico": "💼 Básico",
+        "profesional": "⭐ Profesional",
+        "gestoria": "🏢 Gestoría"
+    }
+    st.write(f"Plan: **{iconos_plan.get(plan_actual, plan_actual)}**")
+    
+    if st.button("🔒 Cerrar sesión"):
+        logout(supabase)
+        st.rerun()
+
+# Menú base
+opciones_menu = [
+    "🏠 Salpicadero",
+    "👥 Clientes",
+    "🤝 Proveedores",
+    "📦 Productos",
+    "💰 Ventas",
+    "🛒 Compras",
+    "👥 Empleados",
+    "🔄 Facturación recurrente",
+    "📖 Libro Contable General",
+    "📒 Contabilidad",
+    "🏛️ Impuestos Trimestrales",
+    "🏦 Conciliación Bancaria",
+    "📊 Dashboards",
+    "📝 Presupuestos",
+    "👥 Colaboradores",
+    "💳 Suscripción",
+    "⚙️ Configuración"
+]
+
+# ============================================================
+# VERIFICACIÓN DE ADMIN
+# ============================================================
+ADMIN_EMAILS = [
+    "esamanzanarez@gmail.com",
+    "admin@hondureformas.com",
+]
+
+user_id = st.session_state.get("user_id")
+if not user_id:
+    try:
+        session = supabase.auth.get_session()
+        if session and getattr(session, "user", None):
+            st.session_state.user_id = session.user.id
+            user_id = session.user.id
+    except Exception:
+        user_id = None
+
+if user_id:
+    try:
+        email_actual = st.session_state.user.email.lower() if st.session_state.user.email else ""
+        es_admin = email_actual in [e.lower() for e in ADMIN_EMAILS]
+        
+        if not es_admin:
+            try:
+                role_res = supabase.table("user_roles").select("role").eq("user_id", user_id).single().execute()
+                es_admin = role_res.data.get("role") == "admin" if role_res.data else False
+            except Exception:
+                es_admin = False
+        
+        st.session_state.es_admin = es_admin
+        
+        if es_admin:
+            opciones_menu.append("🔐 Panel Admin")
+    except Exception:
+        pass
+
+menu = st.sidebar.radio("Navegación", opciones_menu)
+
+if not user_id:
+    st.error("No se pudo obtener el ID de usuario. Por favor, inicia sesión de nuevo.")
+    st.stop()
+
+# ════════════════════════════════════════════════════════════
+# SALPICADERO
+# ════════════════════════════════════════════════════════════
+if menu == "🏠 Salpicadero":
+    st.title("Panel de Control")
+    st.markdown("""
+    <div style="background-color: #E0E7FF; padding: 20px; border-radius: 10px; margin-bottom: 20px;">
+        <h1 style="color: #1E3A8A; text-align: center; margin: 0;">Hondureformas</h1>
+        <p style="text-align: center; color: #4a5568; font-size: 18px;">Resumen de tu negocio</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.write(f"📅 Hoy es {date.today().strftime('%d/%m/%Y')}  |  Bienvenido, {st.session_state.user.email}")
+
+    hoy = date.today()
+    mes_actual = hoy.month
+    anio_actual = hoy.year
+
+    periodo = st.selectbox(
+        "📅 Período",
+        ["Mes actual", "Trimestre actual", "Año actual", "Todo"],
+        index=0,
+        key="salpicadero_periodo"
+    )
+
+    # ────────────────────────────────────────────────────────
+    # Construcción del filtro de período
+    # ────────────────────────────────────────────────────────
+    kwargs_filtro = {"year": anio_actual}
+    if periodo == "Mes actual":
+        kwargs_filtro["month"] = mes_actual
+    elif periodo == "Trimestre actual":
+        kwargs_filtro["quarter"] = (mes_actual - 1) // 3 + 1
+    elif periodo == "Todo":
+        kwargs_filtro = {}  # sin filtro: todo el histórico
+
+    # ────────────────────────────────────────────────────────
+    # Motor fiscal unificado
+    # ────────────────────────────────────────────────────────
+    try:
+        s = calculate_fiscal_summary(
+            get_invoices(user_id),
+            get_expenses(user_id),
+            **kwargs_filtro
+        )
+    except Exception as e:
+        st.error(f"Error al calcular el resumen fiscal: {e}")
+        st.stop()
+
+    # ────────────────────────────────────────────────────────
+    # Métricas principales
+    # ────────────────────────────────────────────────────────
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Ingresos", money(s["base_ventas"]))
+    c2.metric("Gastos", money(s["base_gastos"]))
+    c3.metric("Beneficio bruto", money(s["beneficio_bruto"]))
+
+    st.markdown("---")
+
+    # ────────────────────────────────────────────────────────
+    # Impuestos y resultado neto
+    # ────────────────────────────────────────────────────────
+    c4, c5, c6 = st.columns(3)
+
+    iva_neto_display = max(s["iva_neto"], 0.0)
+    c4.metric(
+        "Provisión IVA (informativo)",
+        f"-{money(iva_neto_display)}",
+        help="IVA repercutido - IVA soportado. Si es negativo, tienes IVA a compensar."
+    )
+
+    modo_label = {
+        "retencion_cliente": "Retención cliente",
+        "pago_fraccionado_20": "Pago fraccionado 20%",
+        "sin_retencion": "Sin provisión",
+    }.get(s["modo_provision"], s["modo_provision"])
+
+    c5.metric(
+        "Provisión IRPF",
+        f"-{money(s['provision_irpf'])}",
+        help=f"Modo: {modo_label}"
+    )
+    c6.metric("Nº operaciones", s["total_operaciones"])
+
+    st.metric(
+        "🔥 GANANCIA NETA (después de impuestos)",
+        money(s["ganancia_neta"])
+    )
+
+    st.caption(f"💡 Provisión IRPF calculada como: **{modo_label}**")
+
+    st.markdown("---")
+
+    # ────────────────────────────────────────────────────────
+    # Contadores secundarios
+    # ────────────────────────────────────────────────────────
+    col_f1, col_f2, col_f3 = st.columns(3)
+    col_f1.metric("Facturas emitidas", s["num_invoices"])
+    col_f2.metric("Gastos registrados", s["num_expenses"])
+    col_f3.metric("Promedio por factura", money(s["ticket_promedio"]))
+# ════════════════════════════════════════════════════════════
+# CLIENTES
+# ════════════════════════════════════════════════════════════
+elif menu == "👥 Clientes":
+    st.title("Gestión de Clientes")
+    clientes_df = get_clients(user_id)
+
+    tab_add, tab_edit, tab_del = st.tabs(["Añadir nuevo", "Editar existente", "Eliminar"])
+
+    with tab_add:
+        with st.form("add_client", clear_on_submit=True):
+            n = st.text_input("Nombre")
+            t = st.text_input("NIF")
+            a = st.text_input("Dirección")
+            tipo = st.radio("Tipo de cliente", ["Empresa (B2B)", "Particular (B2C)"], horizontal=True)
+            if st.form_submit_button("Guardar cliente"):
+                if n:
+                    t_val = (t or "").strip()
+                    if t_val and not validar_nif_cif(t_val):
+                        st.error("El NIF/CIF introducido no es válido.")
+                    else:
+                        try:
+                            supabase.table("clients_v2").insert({
+                                "user_id": user_id,
+                                "name": n.strip(),
+                                "tax_id": t_val,
+                                "address": (a or "").strip(),
+                                "type": "b2b" if "B2B" in tipo else "b2c"
+                            }).execute()
+                            st.success("Cliente guardado correctamente")
+                            get_clients.clear()
+                            time.sleep(0.5)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error al guardar cliente: {e}")
+                else:
+                    st.error("El nombre es obligatorio.")
+
+    with tab_edit:
+        if clientes_df.empty:
+            st.info("No hay clientes registrados para editar.")
+        else:
+            clientes_display = clientes_df[["name", "tax_id", "address", "type"]].copy()
+            clientes_display["type"] = clientes_display["type"].map({"b2b": "Empresa", "b2c": "Particular"})
+            clientes_display.columns = ["Nombre", "NIF/CIF", "Dirección", "Tipo"]
+            
+            column_config = {
+                "Nombre": st.column_config.TextColumn("Nombre", width="medium"),
+                "NIF/CIF": st.column_config.TextColumn("NIF/CIF", width="small"),
+                "Dirección": st.column_config.TextColumn("Dirección", width="large"),
+                "Tipo": st.column_config.TextColumn("Tipo", width="small"),
+            }
+            
+            st.markdown("**Selecciona un cliente de la tabla:**")
+            event = st.dataframe(
+                clientes_display,
+                hide_index=True,
+                use_container_width=True,
+                column_config=column_config,
+                selection_mode="single-row",
+                on_select="rerun",
+                key="clientes_edit_table"
+            )
+            
+            if (event.selection and event.selection.rows and len(event.selection.rows) > 0):
+                selected_row = event.selection.rows[0]
+                if selected_row is not None and 0 <= selected_row < len(clientes_df):
+                    cliente_row = clientes_df.iloc[selected_row]
+                    
+                    st.markdown("---")
+                    st.subheader(f"Editando: **{cliente_row['name']}**")
+                    
+                    with st.form("edit_client_form"):
+                        nuevo_nombre = st.text_input("Nombre", value=cliente_row["name"])
+                        nuevo_nif = st.text_input("NIF", value=cliente_row["tax_id"])
+                        nueva_direccion = st.text_input("Dirección", value=cliente_row["address"])
+                        nuevo_tipo = st.radio("Tipo de cliente", ["Empresa (B2B)", "Particular (B2C)"],
+                                              index=0 if cliente_row.get("type") == "b2b" else 1,
+                                              horizontal=True)
+
+                        if st.form_submit_button("Guardar cambios"):
+                            nif_val = (nuevo_nif or "").strip()
+                            if nif_val and not validar_nif_cif(nif_val):
+                                st.error("El NIF/CIF introducido no es válido.")
+                            else:
+                                try:
+                                    supabase.table("clients_v2").update({
+                                        "name": nuevo_nombre.strip(),
+                                        "tax_id": nif_val,
+                                        "address": nueva_direccion.strip(),
+                                        "type": "b2b" if "B2B" in nuevo_tipo else "b2c"
+                                    }).eq("id", cliente_row["id"]).execute()
+                                    st.success("Cliente actualizado correctamente")
+                                    get_clients.clear()
+                                    time.sleep(0.5)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error al actualizar cliente: {e}")
+                else:
+                    st.info("Selecciona un cliente válido de la tabla.")
+            else:
+                st.info("Haz clic en una fila para seleccionar un cliente.")
+
+    with tab_del:
+        if clientes_df.empty:
+            st.info("No hay clientes registrados para eliminar.")
+        else:
+            clientes_display = clientes_df[["name", "tax_id"]].copy()
+            clientes_display.columns = ["Nombre", "NIF/CIF"]
+            
+            column_config = {
+                "Nombre": st.column_config.TextColumn("Nombre", width="large"),
+                "NIF/CIF": st.column_config.TextColumn("NIF/CIF", width="small"),
+            }
+            
+            st.markdown("**Selecciona un cliente para eliminar:**")
+            event = st.dataframe(
+                clientes_display,
+                hide_index=True,
+                use_container_width=True,
+                column_config=column_config,
+                selection_mode="single-row",
+                on_select="rerun",
+                key="clientes_del_table"
+            )
+            
+            if (event.selection and event.selection.rows and len(event.selection.rows) > 0):
+                selected_row = event.selection.rows[0]
+                if selected_row is not None and 0 <= selected_row < len(clientes_df):
+                    cliente_row_del = clientes_df.iloc[selected_row]
+                    
+                    st.warning(f"⚠️ Vas a eliminar al cliente: **{cliente_row_del['name']}**")
+                    
+                    confirmado = st.checkbox(
+                        "Confirmo que deseo eliminar este cliente",
+                        key=f"confirm_delete_client_{cliente_row_del['id']}"
+                    )
+                    
+                    if st.button(
+                        "🗑️ Eliminar definitivamente",
+                        key=f"delete_client_btn_{cliente_row_del['id']}",
+                        disabled=not confirmado
+                    ):
+                        try:
+                            supabase.table("clients_v2").delete().eq("id", cliente_row_del["id"]).execute()
+                            st.success("Cliente eliminado correctamente")
+                            get_clients.clear()
+                            time.sleep(0.5)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error al eliminar cliente: {e}")
+                    
+                    if not confirmado:
+                        st.caption("Debes marcar la casilla de confirmación para habilitar el botón.")
+                else:
+                    st.info("Selecciona un cliente válido de la tabla.")
+            else:
+                st.info("Haz clic en una fila para seleccionar un cliente.")
+
+    st.markdown("---")
+    st.subheader("Listado de clientes")
+    if not clientes_df.empty:
+        clientes_display = clientes_df[["name", "tax_id", "address", "type"]].copy()
+        clientes_display["type"] = clientes_display["type"].map({"b2b": "Empresa", "b2c": "Particular"})
+        clientes_display.columns = ["Nombre", "NIF/CIF", "Dirección", "Tipo"]
+        st.dataframe(clientes_display, hide_index=True, use_container_width=True)
+    else:
+        st.info("No hay clientes registrados.")
+
+# ════════════════════════════════════════════════════════════
+# PROVEEDORES
+# ════════════════════════════════════════════════════════════
+elif menu == "🤝 Proveedores":
+    st.title("Gestión de Proveedores")
+    proveedores_df = get_suppliers(user_id)
+
+    tab_add, tab_edit, tab_del = st.tabs(["Añadir nuevo", "Editar existente", "Eliminar"])
+
+    with tab_add:
+        with st.form("add_supplier", clear_on_submit=True):
+            n = st.text_input("Nombre")
+            t = st.text_input("NIF")
+            a = st.text_input("Dirección")
+            if st.form_submit_button("Guardar proveedor"):
+                if n:
+                    t_val = (t or "").strip()
+                    if t_val and not validar_nif_cif(t_val):
+                        st.error("El NIF/CIF del proveedor no es válido.")
+                    else:
+                        try:
+                            supabase.table("suppliers_v2").insert({
+                                "user_id": user_id,
+                                "name": n.strip(),
+                                "tax_id": t_val,
+                                "address": (a or "").strip()
+                            }).execute()
+                            st.success("Proveedor guardado correctamente")
+                            get_suppliers.clear()
+                            time.sleep(0.5)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error al guardar proveedor: {e}")
+                else:
+                    st.error("El nombre es obligatorio.")
+
+    with tab_edit:
+        if proveedores_df.empty:
+            st.info("No hay proveedores registrados para editar.")
+        else:
+            proveedores_display = proveedores_df[["name", "tax_id", "address"]].copy()
+            proveedores_display.columns = ["Nombre", "NIF/CIF", "Dirección"]
+            
+            column_config = {
+                "Nombre": st.column_config.TextColumn("Nombre", width="medium"),
+                "NIF/CIF": st.column_config.TextColumn("NIF/CIF", width="small"),
+                "Dirección": st.column_config.TextColumn("Dirección", width="large"),
+            }
+            
+            st.markdown("**Selecciona un proveedor de la tabla:**")
+            event = st.dataframe(
+                proveedores_display,
+                hide_index=True,
+                use_container_width=True,
+                column_config=column_config,
+                selection_mode="single-row",
+                on_select="rerun",
+                key="proveedores_edit_table"
+            )
+            
+            if (event.selection and event.selection.rows and len(event.selection.rows) > 0):
+                selected_row = event.selection.rows[0]
+                if selected_row is not None and 0 <= selected_row < len(proveedores_df):
+                    prov_row = proveedores_df.iloc[selected_row]
+                    
+                    st.markdown("---")
+                    st.subheader(f"Editando: **{prov_row['name']}**")
+                    
+                    with st.form("edit_supplier_form"):
+                        nuevo_nombre = st.text_input("Nombre", value=prov_row["name"])
+                        nuevo_nif = st.text_input("NIF", value=prov_row["tax_id"])
+                        nueva_direccion = st.text_input("Dirección", value=prov_row["address"])
+
+                        if st.form_submit_button("Guardar cambios"):
+                            nif_val = (nuevo_nif or "").strip()
+                            if nif_val and not validar_nif_cif(nif_val):
+                                st.error("El NIF/CIF del proveedor no es válido.")
+                            else:
+                                try:
+                                    supabase.table("suppliers_v2").update({
+                                        "name": nuevo_nombre.strip(),
+                                        "tax_id": nif_val,
+                                        "address": nueva_direccion.strip()
+                                    }).eq("id", prov_row["id"]).execute()
+                                    st.success("Proveedor actualizado correctamente")
+                                    get_suppliers.clear()
+                                    time.sleep(0.5)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error al actualizar proveedor: {e}")
+                else:
+                    st.info("Selecciona un proveedor válido de la tabla.")
+            else:
+                st.info("Haz clic en una fila para seleccionar un proveedor.")
+
+    with tab_del:
+        if proveedores_df.empty:
+            st.info("No hay proveedores registrados para eliminar.")
+        else:
+            proveedores_display = proveedores_df[["name", "tax_id"]].copy()
+            proveedores_display.columns = ["Nombre", "NIF/CIF"]
+            
+            column_config = {
+                "Nombre": st.column_config.TextColumn("Nombre", width="large"),
+                "NIF/CIF": st.column_config.TextColumn("NIF/CIF", width="small"),
+            }
+            
+            st.markdown("**Selecciona un proveedor para eliminar:**")
+            event = st.dataframe(
+                proveedores_display,
+                hide_index=True,
+                use_container_width=True,
+                column_config=column_config,
+                selection_mode="single-row",
+                on_select="rerun",
+                key="proveedores_del_table"
+            )
+            
+            if (event.selection and event.selection.rows and len(event.selection.rows) > 0):
+                selected_row = event.selection.rows[0]
+                if selected_row is not None and 0 <= selected_row < len(proveedores_df):
+                    prov_row_del = proveedores_df.iloc[selected_row]
+                    
+                    st.warning(f"⚠️ Vas a eliminar al proveedor: **{prov_row_del['name']}**")
+                    
+                    confirmado = st.checkbox(
+                        "Confirmo que deseo eliminar este proveedor",
+                        key=f"confirm_delete_supplier_{prov_row_del['id']}"
+                    )
+                    
+                    if st.button(
+                        "🗑️ Eliminar definitivamente",
+                        key=f"delete_supplier_btn_{prov_row_del['id']}",
+                        disabled=not confirmado
+                    ):
+                        try:
+                            supabase.table("suppliers_v2").delete().eq("id", prov_row_del["id"]).execute()
+                            st.success("Proveedor eliminado correctamente")
+                            get_suppliers.clear()
+                            time.sleep(0.5)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error al eliminar proveedor: {e}")
+                    
+                    if not confirmado:
+                        st.caption("Debes marcar la casilla de confirmación para habilitar el botón.")
+                else:
+                    st.info("Selecciona un proveedor válido de la tabla.")
+            else:
+                st.info("Haz clic en una fila para seleccionar un proveedor.")
+
+    st.markdown("---")
+    st.subheader("Listado de proveedores")
+    if not proveedores_df.empty:
+        proveedores_display = proveedores_df[["name", "tax_id", "address"]].copy()
+        proveedores_display.columns = ["Nombre", "NIF/CIF", "Dirección"]
+        st.dataframe(proveedores_display, hide_index=True, use_container_width=True)
+    else:
+        st.info("No hay proveedores registrados.")
+
+# ════════════════════════════════════════════════════════════
+# PRODUCTOS
+# ════════════════════════════════════════════════════════════
+elif menu == "📦 Productos":
+    st.title("Catálogo de Productos / Servicios")
+    productos_df = get_products(user_id)
+
+    if not productos_df.empty:
+        for col in ["description", "price", "default_vat_percentage", "default_irpf_percentage"]:
+            if col not in productos_df.columns:
+                if col == "description":
+                    productos_df[col] = ""
+                else:
+                    productos_df[col] = 0.0
+
+    tab_add, tab_edit, tab_del = st.tabs(["Añadir nuevo", "Editar existente", "Eliminar"])
+
+    with tab_add:
+        with st.form("add_product", clear_on_submit=True):
+            nombre = st.text_input("Nombre")
+            descripcion = st.text_area("Descripción")
+            precio = st.number_input("Precio unitario", min_value=0.0, step=1.0)
+            vat_default = st.number_input("IVA por defecto (%)", value=21.0, step=1.0)
+            irpf_default = st.number_input("IRPF por defecto (%)", value=0.0, step=1.0)
+            if st.form_submit_button("Guardar nuevo producto"):
+                if nombre:
+                    try:
+                        supabase.table("products_v2").insert({
+                            "user_id": user_id,
+                            "name": nombre.strip(),
+                            "description": descripcion.strip(),
+                            "price": precio,
+                            "default_vat_percentage": vat_default,
+                            "default_irpf_percentage": irpf_default
+                        }).execute()
+                        st.success("Producto guardado correctamente")
+                        get_products.clear()
+                        time.sleep(0.5)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error al guardar producto: {e}")
+                else:
+                    st.error("El nombre es obligatorio.")
+
+    with tab_edit:
+        if productos_df.empty:
+            st.info("No hay productos registrados para editar.")
+        else:
+            productos_display = productos_df[["name", "description", "price", "default_vat_percentage", "default_irpf_percentage"]].copy()
+            productos_display.columns = ["Nombre", "Descripción", "Precio", "IVA %", "IRPF %"]
+            
+            column_config = {
+                "Nombre": st.column_config.TextColumn("Nombre", width="medium"),
+                "Descripción": st.column_config.TextColumn("Descripción", width="large"),
+                "Precio": st.column_config.NumberColumn("Precio", format="%.2f €", width="small"),
+                "IVA %": st.column_config.NumberColumn("IVA %", format="%d %%", width="small"),
+                "IRPF %": st.column_config.NumberColumn("IRPF %", format="%d %%", width="small"),
+            }
+            
+            st.markdown("**Selecciona un producto de la tabla:**")
+            event = st.dataframe(
+                productos_display,
+                hide_index=True,
+                use_container_width=True,
+                column_config=column_config,
+                selection_mode="single-row",
+                on_select="rerun",
+                key="productos_edit_table"
+            )
+            
+            if (event.selection and event.selection.rows and len(event.selection.rows) > 0):
+                selected_row = event.selection.rows[0]
+                if selected_row is not None and 0 <= selected_row < len(productos_df):
+                    prod_row = productos_df.iloc[selected_row]
+                    
+                    st.markdown("---")
+                    st.subheader(f"Editando: **{prod_row['name']}**")
+                    
+                    with st.form("edit_product_form"):
+                        nuevo_nombre = st.text_input("Nombre", value=prod_row["name"])
+                        nueva_descripcion = st.text_area("Descripción", value=prod_row.get("description", ""))
+                        nuevo_precio = st.number_input("Precio unitario", min_value=0.0, value=float(prod_row.get("price", 0.0)), step=1.0)
+                        nuevo_vat = st.number_input("IVA por defecto (%)", value=float(prod_row.get("default_vat_percentage", 21.0)), step=1.0)
+                        nuevo_irpf = st.number_input("IRPF por defecto (%)", value=float(prod_row.get("default_irpf_percentage", 0.0)), step=1.0)
+
+                        if st.form_submit_button("Guardar cambios"):
+                            if nuevo_nombre:
+                                try:
+                                    supabase.table("products_v2").update({
+                                        "name": nuevo_nombre.strip(),
+                                        "description": nueva_descripcion.strip(),
+                                        "price": nuevo_precio,
+                                        "default_vat_percentage": nuevo_vat,
+                                        "default_irpf_percentage": nuevo_irpf
+                                    }).eq("id", prod_row["id"]).execute()
+                                    st.success("Producto actualizado correctamente")
+                                    get_products.clear()
+                                    time.sleep(0.5)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error al actualizar producto: {e}")
+                            else:
+                                st.error("El nombre es obligatorio.")
+                else:
+                    st.info("Selecciona un producto válido de la tabla.")
+            else:
+                st.info("Haz clic en una fila para seleccionar un producto.")
+
+    with tab_del:
+        if productos_df.empty:
+            st.info("No hay productos registrados para eliminar.")
+        else:
+            productos_display = productos_df[["name", "price", "default_vat_percentage"]].copy()
+            productos_display.columns = ["Nombre", "Precio", "IVA %"]
+            
+            column_config = {
+                "Nombre": st.column_config.TextColumn("Nombre", width="large"),
+                "Precio": st.column_config.NumberColumn("Precio", format="%.2f €", width="small"),
+                "IVA %": st.column_config.NumberColumn("IVA %", format="%d %%", width="small"),
+            }
+            
+            st.markdown("**Selecciona un producto para eliminar:**")
+            event = st.dataframe(
+                productos_display,
+                hide_index=True,
+                use_container_width=True,
+                column_config=column_config,
+                selection_mode="single-row",
+                on_select="rerun",
+                key="productos_del_table"
+            )
+            
+            if (event.selection and event.selection.rows and len(event.selection.rows) > 0):
+                selected_row = event.selection.rows[0]
+                if selected_row is not None and 0 <= selected_row < len(productos_df):
+                    prod_row_del = productos_df.iloc[selected_row]
+                    
+                    st.warning(f"⚠️ Vas a eliminar el producto: **{prod_row_del['name']}**")
+                    
+                    confirmado = st.checkbox(
+                        "Confirmo que deseo eliminar este producto",
+                        key=f"confirm_delete_product_{prod_row_del['id']}"
+                    )
+                    
+                    if st.button(
+                        "🗑️ Eliminar definitivamente",
+                        key=f"delete_product_btn_{prod_row_del['id']}",
+                        disabled=not confirmado
+                    ):
+                        try:
+                            supabase.table("products_v2").delete().eq("id", prod_row_del["id"]).execute()
+                            st.success("Producto eliminado correctamente")
+                            get_products.clear()
+                            time.sleep(0.5)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error al eliminar producto: {e}")
+                    
+                    if not confirmado:
+                        st.caption("Debes marcar la casilla de confirmación para habilitar el botón.")
+                else:
+                    st.info("Selecciona un producto válido de la tabla.")
+            else:
+                st.info("Haz clic en una fila para seleccionar un producto.")
+
+    st.markdown("---")
+    st.subheader("Catálogo actual")
+    if not productos_df.empty:
+        productos_display = productos_df[["name", "description", "price", "default_vat_percentage", "default_irpf_percentage"]].copy()
+        productos_display.columns = ["Nombre", "Descripción", "Precio", "IVA %", "IRPF %"]
+        st.dataframe(productos_display, hide_index=True, use_container_width=True)
+    else:
+        st.info("No hay productos en el catálogo.")
 # ════════════════════════════════════════════════════════════
 # VENTAS (Con vista previa y líneas dinámicas)
 # ════════════════════════════════════════════════════════════
@@ -1564,6 +2433,2813 @@ with col4:
             "Usa el botón **📝 Emitir rectificativa** (columna izquierda) "
             "para generar la corrección vinculada a esta factura."
         )
+# ════════════════════════════════════════════════════════════
+# COMPRAS (CORREGIDO - IVA 0% para Seguridad Social)
+# ════════════════════════════════════════════════════════════
+elif menu == "🛒 Compras":
+    st.title("Gastos / Compras")
+    proveedores_df = get_suppliers(user_id)
+    if "modo_edicion_gasto" not in st.session_state:
+        st.session_state.modo_edicion_gasto = False
+        st.session_state.gasto_editando_id = None
+        st.session_state.datos_edicion_gasto = {}
+    if proveedores_df.empty:
+        st.warning("Primero registra algún proveedor.")
+    else:
+        if not st.session_state.modo_edicion_gasto:
+            with st.form("add_expense", clear_on_submit=True):
+                num = st.text_input("Nº Factura Proveedor")
+                fecha = st.date_input("Fecha", datetime.now())
+                mes = LISTA_MESES[fecha.month - 1]
+                st.caption(f"📅 Mes: **{mes}**")
+                prov_nombre = st.selectbox("Proveedor", options=proveedores_df["name"].tolist())
+                tipo_gasto = st.selectbox("Tipo de gasto", TIPOS_GASTO)
+                concepto = st.text_input("Concepto (descripción adicional)")
+                base = st.number_input("Base imponible", min_value=0.0, step=10.0)
+                
+                # ============================================================
+                # CORRECCIÓN: Seguridad Social → IVA forzado a 0%
+                # ============================================================
+                if tipo_gasto == "Seguridad Social":
+                    vat_pct = 0.0
+                    st.info("ℹ️ **Seguridad Social** → IVA exento (0%). Es un gasto deducible sin IVA soportado.")
+                    st.number_input(
+                        "% IVA",
+                        value=0.0,
+                        step=0.0,
+                        disabled=True,
+                        key="add_vat_ss_disabled",
+                        help="La Seguridad Social está exenta de IVA por ley"
+                    )
+                else:
+                    vat_pct = st.number_input("% IVA", value=21.0, step=1.0)
+                
+                archivo = st.file_uploader("Subir factura (PDF o imagen)", type=["pdf", "png", "jpg", "jpeg"])
+                
+                if st.form_submit_button("Guardar") and num:
+                    id_prov = proveedores_df.loc[proveedores_df["name"] == prov_nombre, "id"].values[0]
+                    vat_amount = base * vat_pct / 100.0
+                    total = base + vat_amount
+                    attachment_url = None
+                    if archivo is not None:
+                        file_ext = archivo.name.split(".")[-1]
+                        file_path = f"{user_id}/{datetime.now().strftime('%Y%m%d%H%M%S')}_{archivo.name}"
+                        try:
+                            supabase.storage.from_("facturas_gastos").upload(file_path, archivo.getvalue(), {"content-type": archivo.type})
+                            attachment_url = supabase.storage.from_("facturas_gastos").get_public_url(file_path)
+                        except Exception as e:
+                            st.error(f"Error al subir archivo: {e}")
+                    expense_data = {
+                        "user_id": user_id,
+                        "expense_number": num.strip(),
+                        "date": str(fecha),
+                        "month": mes,
+                        "supplier_id": id_prov,
+                        "category": (concepto or "").strip(),
+                        "expense_type": tipo_gasto,
+                        "base_amount": base,
+                        "vat_percentage": vat_pct,
+                        "vat_amount": vat_amount,
+                        "total": total,
+                        "attachment_url": attachment_url
+                    }
+                    with st.spinner("Registrando gasto..."):
+                        exito, expense_id, mensaje = crear_gasto_con_rollback(
+                            expense_data, user_id, prov_nombre
+                        )
+                    if exito:
+                        st.toast("✅ Gasto registrado correctamente", icon="✅")
+                        st.success(mensaje)
+                        get_expenses.clear()
+                        time.sleep(0.5)
+                        st.rerun()
+                    else:
+                        st.error(mensaje)
+        
+        # ============================================================
+        # EDICIÓN DE GASTO
+        # ============================================================
+        if st.session_state.modo_edicion_gasto:
+            st.warning("Editando gasto")
+            datos = st.session_state.datos_edicion_gasto
+            with st.form("edit_expense_form"):
+                num = st.text_input("Nº Factura Proveedor", value=datos.get("expense_number", ""))
+                fecha = st.date_input("Fecha", value=pd.to_datetime(datos.get("date", datetime.now())))
+                mes = LISTA_MESES[fecha.month - 1]
+                st.caption(f"📅 Mes: **{mes}**")
+                lista_proveedores = proveedores_df["name"].tolist()
+                provider_name = datos.get("provider_name", "")
+                try:
+                    index_prov = lista_proveedores.index(provider_name) if provider_name in lista_proveedores else 0
+                except ValueError:
+                    index_prov = 0
+                prov_nombre = st.selectbox("Proveedor", options=lista_proveedores, index=index_prov)
+                tipo_gasto = st.selectbox("Tipo de gasto", TIPOS_GASTO, index=TIPOS_GASTO.index(datos.get("expense_type", "Otros")) if datos.get("expense_type", "Otros") in TIPOS_GASTO else 0)
+                concepto = st.text_input("Concepto", value=datos.get("category", ""))
+                base = st.number_input("Base imponible", value=float(datos.get("base_amount", 0)), min_value=0.0, step=10.0)
+                
+                # ============================================================
+                # CORRECCIÓN: Seguridad Social → IVA forzado a 0% (edición)
+                # ============================================================
+                if tipo_gasto == "Seguridad Social":
+                    vat_pct = 0.0
+                    st.info("ℹ️ **Seguridad Social** → IVA exento (0%).")
+                    st.number_input(
+                        "% IVA",
+                        value=0.0,
+                        step=0.0,
+                        disabled=True,
+                        key="edit_vat_ss_disabled",
+                        help="La Seguridad Social está exenta de IVA por ley"
+                    )
+                else:
+                    vat_pct = st.number_input("% IVA", value=float(datos.get("vat_percentage", 21)), step=1.0)
+                
+                nuevo_archivo = st.file_uploader("Cambiar archivo (dejar vacío para mantener actual)", type=["pdf", "png", "jpg", "jpeg"])
+                
+                if st.form_submit_button("Guardar cambios"):
+                    vat_amount = base * vat_pct / 100.0
+                    total = base + vat_amount
+                    updates = {
+                        "expense_number": num.strip(),
+                        "date": str(fecha),
+                        "month": mes,
+                        "supplier_id": proveedores_df[proveedores_df["name"] == prov_nombre].iloc[0]["id"],
+                        "category": concepto.strip(),
+                        "expense_type": tipo_gasto,
+                        "base_amount": base,
+                        "vat_percentage": vat_pct,
+                        "vat_amount": vat_amount,
+                        "total": total
+                    }
+                    if nuevo_archivo is not None:
+                        file_ext = nuevo_archivo.name.split(".")[-1]
+                        file_path = f"{user_id}/{datetime.now().strftime('%Y%m%d%H%M%S')}_{nuevo_archivo.name}"
+                        try:
+                            supabase.storage.from_("facturas_gastos").upload(file_path, nuevo_archivo.getvalue(), {"content-type": nuevo_archivo.type})
+                            updates["attachment_url"] = supabase.storage.from_("facturas_gastos").get_public_url(file_path)
+                        except Exception as e:
+                            st.error(f"Error al subir nuevo archivo: {e}")
+                    try:
+                        supabase.table("expenses_v2").update(updates).eq("id", st.session_state.gasto_editando_id).execute()
+                        st.success("Gasto actualizado")
+                        st.session_state.modo_edicion_gasto = False
+                        get_expenses.clear()
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error al actualizar gasto: {e}")
+                if st.form_submit_button("Cancelar edición"):
+                    st.session_state.modo_edicion_gasto = False
+                    st.rerun()
+
+    # ============================================================
+    # LISTADO DE GASTOS
+    # ============================================================
+    exp_df = get_expenses(user_id)
+    if not exp_df.empty:
+        exp_display = exp_df.copy()
+        if "category" in exp_display.columns:
+            exp_display.rename(columns={"category": "concept"}, inplace=True)
+        if "supplier_name" in exp_display.columns:
+            exp_display["Proveedor"] = exp_display["supplier_name"]
+        else:
+            exp_display["Proveedor"] = "Sin proveedor"
+        exp_display = exp_display[["expense_number", "date", "Proveedor", "expense_type", "concept", "base_amount", "total"]].copy()
+        exp_display.columns = ["Nº Factura", "Fecha", "Proveedor", "Tipo Gasto", "Concepto", "Base Imponible", "Total"]
+        exp_display["Fecha"] = pd.to_datetime(exp_display["Fecha"]).dt.strftime("%d/%m/%Y")
+        column_config = {
+            "Nº Factura": st.column_config.TextColumn("Nº Factura", width="small"),
+            "Fecha": st.column_config.TextColumn("Fecha", width="small"),
+            "Proveedor": st.column_config.TextColumn("Proveedor", width="medium"),
+            "Tipo Gasto": st.column_config.TextColumn("Tipo Gasto", width="small"),
+            "Concepto": st.column_config.TextColumn("Concepto", width="medium"),
+            "Base Imponible": st.column_config.NumberColumn("Base Imponible", format="%.2f €", width="small"),
+            "Total": st.column_config.NumberColumn("Total", format="%.2f €", width="small"),
+        }
+        st.subheader("Gastos registrados")
+        event = st.dataframe(exp_display, hide_index=True, use_container_width=True, column_config=column_config, selection_mode="single-row", on_select="rerun", key="gastos_table")
+        if (event.selection and event.selection.rows and len(event.selection.rows) > 0):
+            selected_row = event.selection.rows[0]
+            if selected_row is not None and 0 <= selected_row < len(exp_df):
+                gasto_seleccionado = exp_df.iloc[selected_row]
+                gasto_row = gasto_seleccionado.to_dict()
+                st.markdown("---")
+                st.subheader(f"Acciones para gasto {gasto_row['expense_number']}")
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("✏️ Rectificar gasto"):
+                        st.session_state.modo_edicion_gasto = True
+                        st.session_state.gasto_editando_id = gasto_row["id"]
+                        st.session_state.datos_edicion_gasto = {
+                            "expense_number": gasto_row["expense_number"],
+                            "date": gasto_row["date"],
+                            "month": gasto_row["month"],
+                            "provider_name": gasto_row.get("Proveedor", gasto_row.get("supplier_name", "")),
+                            "category": gasto_row.get("concept", gasto_row.get("category", "")),
+                            "expense_type": gasto_row.get("expense_type", "Otros"),
+                            "base_amount": gasto_row["base_amount"],
+                            "vat_percentage": gasto_row.get("vat_percentage", 21),
+                            "attachment_url": gasto_row.get("attachment_url", "")
+                        }
+                        st.rerun()
+                with col2:
+                    confirmado = st.checkbox("Confirmo que deseo eliminar este gasto", key=f"confirm_del_gasto_{gasto_row['id']}")
+                    if st.button("🗑️ Eliminar gasto", key=f"del_gasto_{gasto_row['id']}", disabled=not confirmado):
+                        try:
+                            supabase.table("expenses_v2").delete().eq("id", gasto_row["id"]).execute()
+                            st.success("Gasto eliminado")
+                            get_expenses.clear()
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+    else:
+        st.info("No hay gastos registrados.")
+# ════════════════════════════════════════════════════════════
+# EMPLEADOS (CON NÓMINAS Y SEGURIDAD SOCIAL)
+# ════════════════════════════════════════════════════════════
+elif menu == "👥 Empleados":
+    st.title("👥 Gestión de Empleados y Nóminas")
+    
+    tab_empleados, tab_nominas, tab_ss, tab_modelo111 = st.tabs(["👥 Empleados", "💰 Nóminas", "🏥 Seguridad Social", "📄 Modelo 111"])
+    
+    # TAB 1: EMPLEADOS
+    with tab_empleados:
+        st.subheader("👥 Empleados Registrados")
+        
+        with st.form("add_employee", clear_on_submit=True):
+            st.markdown("**➕ Añadir nuevo empleado**")
+            col_e1, col_e2 = st.columns(2)
+            with col_e1:
+                nombre = st.text_input("Nombre completo")
+                dni = st.text_input("DNI/NIE")
+            with col_e2:
+                nss = st.text_input("Nº Seguridad Social")
+                fecha_alta = st.date_input("Fecha de alta", date.today())
+            
+            col_e3, col_e4 = st.columns(2)
+            with col_e3:
+                tipo_contrato = st.selectbox("Tipo de contrato", ["Indefinido", "Temporal", "Formación", "Prácticas"])
+                salario_bruto = st.number_input("Salario bruto anual (€)", min_value=0.0, step=1000.0)
+            with col_e4:
+                irpf_pct = st.number_input("% IRPF", min_value=0.0, max_value=45.0, value=15.0, step=0.5)
+                salario_mensual = salario_bruto / 12 if salario_bruto > 0 else 0
+                st.text(f"Salario mensual: {money(salario_mensual)}")
+            
+            if st.form_submit_button("💾 Guardar empleado"):
+                if nombre and dni and nss:
+                    try:
+                        ss_employee = salario_mensual * 0.0635
+                        ss_company = salario_mensual * 0.2930
+                        
+                        supabase.table("employees").insert({
+                            "user_id": user_id,
+                            "full_name": nombre.strip(),
+                            "dni_nie": dni.strip().upper(),
+                            "social_security_number": nss.strip(),
+                            "start_date": str(fecha_alta),
+                            "contract_type": tipo_contrato.lower(),
+                            "gross_salary": salario_mensual,
+                            "irpf_percentage": irpf_pct,
+                            "social_security_employee": ss_employee,
+                            "social_security_company": ss_company,
+                            "active": True
+                        }).execute()
+                        st.success("Empleado guardado correctamente")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+                else:
+                    st.error("Nombre, DNI y NSS son obligatorios.")
+        
+        try:
+            emp_res = supabase.table("employees").select("*").eq("user_id", user_id).eq("active", True).execute()
+            if emp_res.data:
+                emp_df = pd.DataFrame(emp_res.data)
+                emp_display = emp_df[["full_name", "dni_nie", "gross_salary", "irpf_percentage", "contract_type"]].copy()
+                emp_display.columns = ["Nombre", "DNI/NIE", "Salario Mensual", "IRPF %", "Contrato"]
+                st.dataframe(emp_display, hide_index=True, use_container_width=True)
+            else:
+                st.info("No hay empleados registrados.")
+        except Exception as e:
+            st.error(f"Error al cargar empleados: {e}")
+    
+    # TAB 2: NÓMINAS
+    with tab_nominas:
+        st.subheader("💰 Generar Nómina")
+        
+        try:
+            emp_res = supabase.table("employees").select("id, full_name, gross_salary, irpf_percentage, social_security_employee, social_security_company").eq("user_id", user_id).eq("active", True).execute()
+            
+            if emp_res.data:
+                emp_list = emp_res.data
+                emp_nombres = [f"{e['full_name']} - {money(e['gross_salary'])}/mes" for e in emp_list]
+                
+                col_n1, col_n2 = st.columns(2)
+                with col_n1:
+                    emp_sel = st.selectbox("Empleado", emp_nombres)
+                    emp_idx = emp_nombres.index(emp_sel)
+                    empleado = emp_list[emp_idx]
+                with col_n2:
+                    mes_nomina = st.selectbox("Mes", LISTA_MESES, index=datetime.now().month - 1)
+                
+                salario = empleado["gross_salary"]
+                irpf_pct = empleado["irpf_percentage"]
+                ss_emp = empleado["social_security_employee"]
+                ss_empresa = empleado["social_security_company"]
+                
+                irpf_amount = salario * irpf_pct / 100
+                neto = salario - irpf_amount - ss_emp
+                coste_empresa = salario + ss_empresa
+                
+                st.markdown("---")
+                st.subheader("📊 Resumen de Nómina")
+                
+                col_r1, col_r2, col_r3 = st.columns(3)
+                col_r1.metric("Salario Bruto", money(salario))
+                col_r2.metric("IRPF Retenido", f"-{money(irpf_amount)}")
+                col_r3.metric("SS Empleado", f"-{money(ss_emp)}")
+                
+                col_r4, col_r5, col_r6 = st.columns(3)
+                col_r4.metric("💵 Salario Neto", money(neto))
+                col_r5.metric("SS Empresa", money(ss_empresa))
+                col_r6.metric("💰 Coste Total Empresa", money(coste_empresa))
+                
+                nom_existente = None
+                try:
+                    check_res = supabase.table("payrolls").select("id").eq("user_id", user_id).eq("employee_id", empleado["id"]).eq("month", mes_nomina).eq("year", date.today().year).execute()
+                    nom_existente = check_res.data[0]["id"] if check_res.data else None
+                except Exception:
+                    pass
+                
+                if nom_existente:
+                    st.warning(f"⚠️ Ya existe una nómina de {empleado['full_name']} para {mes_nomina}. Se actualizará.")
+                
+                if st.button("💾 Guardar nómina"):
+                    try:
+                        if nom_existente:
+                            supabase.table("payrolls").update({
+                                "gross_salary": salario,
+                                "irpf_amount": irpf_amount,
+                                "social_security_employee": ss_emp,
+                                "social_security_company": ss_empresa,
+                                "net_salary": neto,
+                                "total_company_cost": coste_empresa
+                            }).eq("id", nom_existente).execute()
+                            st.success(f"Nómina actualizada para {mes_nomina}")
+                        else:
+                            supabase.table("payrolls").insert({
+                                "user_id": user_id,
+                                "employee_id": empleado["id"],
+                                "month": mes_nomina,
+                                "year": date.today().year,
+                                "gross_salary": salario,
+                                "irpf_amount": irpf_amount,
+                                "social_security_employee": ss_emp,
+                                "social_security_company": ss_empresa,
+                                "net_salary": neto,
+                                "total_company_cost": coste_empresa
+                            }).execute()
+                            
+                            try:
+                                expense_data = {
+                                    "user_id": user_id,
+                                    "expense_number": f"NOM-{mes_nomina[:3].upper()}-{date.today().year}",
+                                    "date": str(date.today()),
+                                    "month": mes_nomina,
+                                    "supplier_id": None,
+                                    "category": f"Nómina {empleado['full_name']}",
+                                    "expense_type": "Nomina",
+                                    "base_amount": coste_empresa,
+                                    "vat_percentage": 0,
+                                    "vat_amount": 0,
+                                    "total": coste_empresa,
+                                    "attachment_url": None
+                                }
+                                
+                                exito_gasto, gasto_id, mensaje_gasto = crear_gasto_con_rollback(
+                                    expense_data, user_id, f"Empleado: {empleado['full_name']}"
+                                )
+                                
+                                if exito_gasto:
+                                    st.success(f"Nómina guardada y gasto contabilizado: {money(coste_empresa)}")
+                                else:
+                                    st.warning(f"Nómina guardada pero gasto no creado: {mensaje_gasto}")
+                            except Exception as e:
+                                st.warning(f"Nómina guardada pero error al crear gasto: {e}")
+                            
+                            st.success(f"Nómina de {empleado['full_name']} guardada para {mes_nomina}")
+                        
+                        get_expenses.clear()
+                        time.sleep(0.5)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+            else:
+                st.info("No hay empleados registrados.")
+        except Exception as e:
+            st.error(f"Error: {e}")
+        
+        st.markdown("---")
+        st.subheader("📋 Historial de Nóminas")
+        try:
+            nom_res = supabase.table("payrolls").select("*, employees(full_name)").eq("user_id", user_id).order("created_at", desc=True).execute()
+            if nom_res.data:
+                nom_df = pd.DataFrame(nom_res.data)
+                if "employees" in nom_df.columns:
+                    nom_df["empleado"] = nom_df["employees"].apply(lambda x: x["full_name"] if isinstance(x, dict) else "")
+                else:
+                    nom_df["empleado"] = ""
+                nom_display = nom_df[["month", "year", "empleado", "gross_salary", "net_salary", "total_company_cost"]].copy()
+                nom_display.columns = ["Mes", "Año", "Empleado", "Bruto", "Neto", "Coste Empresa"]
+                st.dataframe(nom_display, hide_index=True, use_container_width=True)
+            else:
+                st.info("No hay nóminas registradas.")
+        except Exception:
+            pass
+    
+    # TAB 3: SEGURIDAD SOCIAL
+    with tab_ss:
+        st.subheader("🏥 Gastos de Seguridad Social")
+        
+        with st.form("add_ss_expense", clear_on_submit=True):
+            st.markdown("**➕ Registrar pago de Seguridad Social**")
+            col_ss1, col_ss2 = st.columns(2)
+            with col_ss1:
+                mes_ss = st.selectbox("Mes", LISTA_MESES, index=datetime.now().month - 1)
+                tipo_ss = st.selectbox("Tipo de cotización", ["Régimen General", "Autónomos (RETA)"])
+            with col_ss2:
+                importe_ss = st.number_input("Importe (€)", min_value=0.0, step=50.0)
+                fecha_ss = st.date_input("Fecha de pago", date.today())
+            
+            if st.form_submit_button("💾 Guardar pago SS"):
+                if importe_ss > 0:
+                    try:
+                        expense_data = {
+                            "user_id": user_id,
+                            "expense_number": f"SS-{mes_ss[:3].upper()}-{date.today().year}",
+                            "date": str(fecha_ss),
+                            "month": mes_ss,
+                            "supplier_id": None,
+                            "category": f"Seguridad Social {tipo_ss}",
+                            "expense_type": "Seguridad Social",
+                            "base_amount": importe_ss,
+                            "vat_percentage": 0,
+                            "vat_amount": 0,
+                            "total": importe_ss,
+                            "attachment_url": None
+                        }
+                        
+                        exito, gasto_id, mensaje = crear_gasto_con_rollback(
+                            expense_data, user_id, f"Tesorería Seguridad Social"
+                        )
+                        
+                        if exito:
+                            st.success(f"Pago de Seguridad Social registrado: {money(importe_ss)}")
+                            get_expenses.clear()
+                            time.sleep(0.5)
+                            st.rerun()
+                        else:
+                            st.error(mensaje)
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+                else:
+                    st.error("El importe debe ser mayor que 0.")
+        
+        st.markdown("---")
+        st.subheader("📋 Pagos de Seguridad Social registrados")
+        try:
+            ss_res = supabase.table("expenses_v2").select("*").eq("user_id", user_id).eq("expense_type", "Seguridad Social").order("date", desc=True).execute()
+            if ss_res.data:
+                ss_df = pd.DataFrame(ss_res.data)
+                ss_display = ss_df[["expense_number", "date", "month", "category", "total"]].copy()
+                ss_display.columns = ["Nº", "Fecha", "Mes", "Descripción", "Importe"]
+                ss_display["Fecha"] = pd.to_datetime(ss_display["Fecha"]).dt.strftime("%d/%m/%Y")
+                st.dataframe(ss_display, hide_index=True, use_container_width=True)
+                st.metric("Total SS registrado", money(ss_df["total"].sum()))
+            else:
+                st.info("No hay pagos de Seguridad Social registrados.")
+        except Exception as e:
+            st.info(f"Tabla de gastos no disponible: {e}")
+    
+    # TAB 4: MODELO 111
+    with tab_modelo111:
+        st.subheader("📄 Modelo 111 - Retenciones IRPF")
+        
+        try:
+            hoy = date.today()
+            if hoy.month <= 3:
+                meses_trim = ["Enero", "Febrero", "Marzo"]
+                trimestre = "1T"
+            elif hoy.month <= 6:
+                meses_trim = ["Abril", "Mayo", "Junio"]
+                trimestre = "2T"
+            elif hoy.month <= 9:
+                meses_trim = ["Julio", "Agosto", "Septiembre"]
+                trimestre = "3T"
+            else:
+                meses_trim = ["Octubre", "Noviembre", "Diciembre"]
+                trimestre = "4T"
+            
+            nom_res = supabase.table("payrolls").select("*").eq("user_id", user_id).in_("month", meses_trim).execute()
+            
+            if nom_res.data:
+                nom_df = pd.DataFrame(nom_res.data)
+                total_irpf = nom_df["irpf_amount"].sum()
+                num_nominas = len(nom_df)
+                
+                st.markdown(f"### Trimestre {trimestre} {hoy.year}")
+                
+                col_m1, col_m2, col_m3 = st.columns(3)
+                col_m1.metric("Nº de Nóminas", num_nominas)
+                col_m2.metric("Total Retenciones IRPF", money(total_irpf))
+                col_m3.metric("A ingresar", money(total_irpf))
+                
+                st.info("📌 El Modelo 111 se presenta trimestralmente (1-20 de abril, julio, octubre, enero).")
+                
+                resumen_data = {
+                    "Concepto": ["Nº Nóminas", "Total Retenciones IRPF"],
+                    "Importe": [num_nominas, total_irpf]
+                }
+                resumen_df = pd.DataFrame(resumen_data)
+                csv_bytes = resumen_df.to_csv(index=False, sep=';').encode('utf-8-sig')
+                st.download_button(
+                    "⬇️ Descargar resumen CSV",
+                    csv_bytes,
+                    f"Modelo_111_{trimestre}_{hoy.year}.csv",
+                    mime="text/csv"
+                )
+            else:
+                st.info(f"No hay nóminas registradas para el trimestre actual.")
+        except Exception as e:
+            st.error(f"Error: {e}")
+
+# ════════════════════════════════════════════════════════════
+# FACTURACIÓN RECURRENTE
+# ════════════════════════════════════════════════════════════
+elif menu == "🔄 Facturación recurrente":
+    st.title("Facturación recurrente")
+    clientes_df = get_clients(user_id)
+    with st.form("add_recurring"):
+        cliente = st.selectbox("Cliente", clientes_df["name"].tolist() if not clientes_df.empty else [])
+        frecuencia = st.selectbox("Frecuencia", ["weekly", "monthly", "yearly"])
+        proxima_fecha = st.date_input("Próxima factura", date.today() + timedelta(days=30))
+        concepto = st.text_input("Concepto")
+        base = st.number_input("Base imponible", min_value=0.0, step=10.0)
+        vat = st.number_input("% IVA", value=21.0)
+        irpf = st.number_input("% IRPF", value=0.0)
+        if st.form_submit_button("Guardar recurrencia"):
+            cliente_id = clientes_df[clientes_df["name"] == cliente]["id"].iloc[0]
+            try:
+                supabase.table("recurring_invoices").insert({
+                    "user_id": user_id,
+                    "client_id": cliente_id,
+                    "frequency": frecuencia,
+                    "next_date": str(proxima_fecha),
+                    "base_amount": base,
+                    "vat_percentage": vat,
+                    "irpf_percentage": irpf,
+                    "concept": concepto.strip(),
+                    "active": True
+                }).execute()
+                st.success("Recurrencia guardada")
+                get_recurring_invoices.clear()
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error al guardar recurrencia: {e}")
+    st.subheader("Facturas recurrentes activas")
+    recs = get_recurring_invoices(user_id)
+    if not recs.empty:
+        recs["Cliente"] = recs["client_name"] if "client_name" in recs.columns else recs.get("client_name", "")
+        st.dataframe(recs, width='stretch')
+    if st.button("Generar facturas pendientes hoy"):
+        hoy = date.today()
+        try:
+            recs_to_process = supabase.table("recurring_invoices")\
+                .select("*")\
+                .eq("user_id", user_id)\
+                .eq("active", True)\
+                .lte("next_date", str(hoy))\
+                .execute()
+            if recs_to_process.data:
+                for r in recs_to_process.data:
+                    num = obtener_siguiente_numero_factura(user_id)
+                    inv_data = {
+                        "user_id": user_id,
+                        "invoice_number": num,
+                        "date": str(hoy),
+                        "month": LISTA_MESES[hoy.month-1],
+                        "client_id": r["client_id"],
+                        "concept": r["concept"],
+                        "base_amount": r["base_amount"],
+                        "vat_percentage": r["vat_percentage"],
+                        "irpf_percentage": r["irpf_percentage"],
+                        "vat_amount": r["base_amount"] * r["vat_percentage"] / 100,
+                        "irpf_amount": r["base_amount"] * r["irpf_percentage"] / 100,
+                        "total": r["base_amount"] + (r["base_amount"]*r["vat_percentage"]/100) - (r["base_amount"]*r["irpf_percentage"]/100),
+                        "status": "pendiente"
+                    }
+                    try:
+                        supabase.table("invoices_v2").insert(inv_data).execute()
+                    except Exception:
+                        pass
+                    if r["frequency"] == "weekly": next_date = hoy + timedelta(weeks=1)
+                    elif r["frequency"] == "monthly": next_date = hoy + timedelta(days=30)
+                    else: next_date = hoy + timedelta(days=365)
+                    try:
+                        supabase.table("recurring_invoices").update({"next_date": str(next_date)}).eq("id", r["id"]).execute()
+                    except Exception:
+                        pass
+                st.success(f"Se generaron {len(recs_to_process.data)} facturas")
+                get_recurring_invoices.clear()
+                get_invoices.clear()
+                st.rerun()
+            else:
+                st.info("No hay facturas pendientes para hoy")
+        except Exception as e:
+            st.error(f"Error al generar facturas recurrentes: {e}")
+
+# ════════════════════════════════════════════════════════════
+# LIBRO CONTABLE GENERAL
+# ════════════════════════════════════════════════════════════
+elif menu == "📖 Libro Contable General":
+    st.title("📖 Libro Registro Contable")
+    st.caption("Consolidado oficial de facturas emitidas (ventas) y recibidas (gastos)")
+
+    inv = get_invoices(user_id)
+    exp = get_expenses(user_id)
+
+    # Procesamiento y unificación de Facturas de Venta
+    if not inv.empty:
+        inv["date_dt"] = pd.to_datetime(inv["date"], errors="coerce")
+        inv["year"] = inv["date_dt"].dt.year
+        inv["month_num"] = inv["date_dt"].dt.month
+        inv["tipo"] = "🟢 Venta"
+        
+        if "invoice_number" in inv.columns:
+            inv.rename(columns={"invoice_number": "numero"}, inplace=True)
+        elif "number" in inv.columns:
+            inv.rename(columns={"number": "numero"}, inplace=True)
+            
+        if "concept" not in inv.columns and "description" in inv.columns:
+            inv.rename(columns={"description": "concept"}, inplace=True)
+            
+        if "irpf_amount" not in inv.columns:
+            inv["irpf_amount"] = 0.0
+
+    # Procesamiento y unificación de Gastos
+    if not exp.empty:
+        exp["date_dt"] = pd.to_datetime(exp["date"], errors="coerce")
+        exp["year"] = exp["date_dt"].dt.year
+        exp["month_num"] = exp["date_dt"].dt.month
+        exp["tipo"] = "🔴 Gasto"
+        
+        if "expense_number" in exp.columns:
+            exp.rename(columns={"expense_number": "numero"}, inplace=True)
+        elif "number" in exp.columns:
+            exp.rename(columns={"number": "numero"}, inplace=True)
+            
+        if "category" in exp.columns and "concept" not in exp.columns:
+            exp.rename(columns={"category": "concept"}, inplace=True)
+        elif "description" in exp.columns and "concept" not in exp.columns:
+            exp.rename(columns={"description": "concept"}, inplace=True)
+            
+        if "irpf_amount" not in exp.columns:
+            exp["irpf_amount"] = 0.0
+
+    st.subheader("🔍 Filtros de Período")
+    col_f1, col_f2 = st.columns(2)
+
+    with col_f1:
+        anios_disponibles = set()
+        if not inv.empty:
+            anios_disponibles.update(inv["year"].dropna().unique())
+        if not exp.empty:
+            anios_disponibles.update(exp["year"].dropna().unique())
+        if not anios_disponibles:
+            anios_disponibles = {datetime.now().year}
+        anios_disponibles = sorted([int(y) for y in anios_disponibles], reverse=True)
+        anio_seleccionado = st.selectbox("📅 Ejercicio Fiscal", anios_disponibles, index=0)
+
+    with col_f2:
+        mes_seleccionado = st.selectbox("📆 Mes", LISTA_MESES, index=datetime.now().month - 1)
+        # Obtener el índice numérico del mes seleccionado (1-12)
+        mes_num_sel = LISTA_MESES.index(mes_seleccionado) + 1 if mes_seleccionado in LISTA_MESES else datetime.now().month
+
+    # Filtrar por año y número de mes
+    inv_filtrado = inv[(inv["year"] == anio_seleccionado) & (inv["month_num"] == mes_num_sel)].copy() if not inv.empty else pd.DataFrame()
+    exp_filtrado = exp[(exp["year"] == anio_seleccionado) & (exp["month_num"] == mes_num_sel)].copy() if not exp.empty else pd.DataFrame()
+
+    df_completo = pd.concat([inv_filtrado, exp_filtrado], ignore_index=True)
+
+    if df_completo.empty:
+        st.info(f"No hay movimientos contables registrados en {mes_seleccionado} de {anio_seleccionado}.")
+        st.stop()
+
+    st.markdown("---")
+    st.subheader(f"📊 Resumen de {mes_seleccionado} {anio_seleccionado}")
+
+    # Cálculos detallados
+    base_ventas = pd.to_numeric(inv_filtrado["base_amount"], errors="coerce").sum() if not inv_filtrado.empty else 0.0
+    base_gastos = pd.to_numeric(exp_filtrado["base_amount"], errors="coerce").sum() if not exp_filtrado.empty else 0.0
+    beneficio_bruto = base_ventas - base_gastos
+
+    total_iva_repercutido = pd.to_numeric(inv_filtrado["vat_amount"], errors="coerce").sum() if not inv_filtrado.empty else 0.0
+    total_iva_soportado = pd.to_numeric(exp_filtrado["vat_amount"], errors="coerce").sum() if not exp_filtrado.empty else 0.0
+    iva_neto = total_iva_repercutido - total_iva_soportado
+    num_registros = len(df_completo)
+
+    # Tarjeta resumida con diseño limpio
+    with st.container(border=True):
+        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+        col_m1.metric("🟢 Base Ventas", money(base_ventas))
+        col_m2.metric("🔴 Base Gastos", money(base_gastos))
+        col_m3.metric("📄 IVA Repercutido", money(total_iva_repercutido))
+        col_m4.metric("🧾 IVA Soportado", money(total_iva_soportado))
+
+        st.markdown("---")
+
+        col_m5, col_m6, col_m7 = st.columns(3)
+        col_m5.metric("📈 Beneficio Bruto", money(beneficio_bruto))
+        col_m6.metric(
+            "💶 IVA Neto (Modelo 303)",
+            money(iva_neto),
+            delta="A ingresar a Hacienda" if iva_neto > 0 else "A compensar/devolver",
+            delta_color="inverse" if iva_neto > 0 else "normal"
+        )
+        col_m7.metric("📋 Nº de Registros", f"{num_registros} ops.")
+
+    st.markdown("---")
+    st.subheader("📋 Registros del Período")
+
+    df_display = df_completo.copy()
+    columnas_mostrar = ["tipo", "numero", "date_dt", "concept", "base_amount", "vat_amount", "total"]
+
+    for col in columnas_mostrar:
+        if col not in df_display.columns:
+            df_display[col] = ""
+
+    df_display = df_display[columnas_mostrar].copy()
+    df_display.columns = ["tipo", "numero", "date", "concept", "base_amount", "vat_amount", "total"]
+
+    column_config = {
+        "tipo": st.column_config.TextColumn("Tipo", width="small"),
+        "numero": st.column_config.TextColumn("Nº Factura / Doc", width="medium"),
+        "date": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY", width="small"),
+        "concept": st.column_config.TextColumn("Concepto", width="large"),
+        "base_amount": st.column_config.NumberColumn("Base Imponible", format="%.2f €"),
+        "vat_amount": st.column_config.NumberColumn("Cuota IVA", format="%.2f €"),
+        "total": st.column_config.NumberColumn("Total", format="%.2f €"),
+    }
+
+    st.dataframe(df_display, hide_index=True, use_container_width=True, column_config=column_config)
+
+    st.markdown("---")
+    # Preparación del archivo CSV para descarga
+    export_df = df_completo.copy()
+    export_df["date"] = pd.to_datetime(export_df["date_dt"], errors="coerce").dt.strftime("%d/%m/%Y")
+    columnas_export = ["tipo", "numero", "date", "concept", "base_amount", "vat_amount", "total"]
+
+    for col in columnas_export:
+        if col not in export_df.columns:
+            export_df[col] = ""
+
+    export_df = export_df[columnas_export].copy()
+    export_df.columns = ["Tipo", "Nº Factura", "Fecha", "Concepto", "Base Imponible", "Cuota IVA", "Total"]
+
+    csv_bytes = export_df.to_csv(index=False, sep=';').encode('utf-8-sig')
+
+    st.download_button(
+        "⬇️ Exportar a CSV (compatible con Excel)",
+        csv_bytes,
+        f"Libro_Registro_{mes_seleccionado}_{anio_seleccionado}.csv",
+        mime="text/csv",
+        key="descargar_csv_libro"
+    )
+
+# ════════════════════════════════════════════════════════════
+# CONTABILIDAD
+# ════════════════════════════════════════════════════════════
+elif menu == "📒 Contabilidad":
+    st.title("Contabilidad de doble partida")
+    submenu = st.radio(
+        "Seleccionar informe",
+        ["Libro Diario", "Mayor", "PyG y Balance"],
+        horizontal=True,
+        key="contabilidad_submenu"
+    )
+    st.markdown("---")
+
+    # ────────────────────────────────────────────────────────
+    # LIBRO DIARIO
+    # ────────────────────────────────────────────────────────
+    if submenu == "Libro Diario":
+        entries = get_journal_entries(user_id)
+        if not entries.empty:
+            entry_id = st.selectbox(
+                "Selecciona un asiento contable",
+                entries["id"].tolist(),
+                format_func=lambda x: f"📅 {entries[entries['id']==x]['date'].values[0]} — {entries[entries['id']==x]['description'].values[0]}",
+                key="diario_entry_id"
+            )
+            try:
+                lineas = supabase.table("journal_entry_lines").select("*").eq("journal_entry_id", entry_id).execute()
+                lineas_df = pd.DataFrame(lineas.data) if lineas.data else pd.DataFrame()
+
+                if not lineas_df.empty:
+                    column_config = {
+                        "account": st.column_config.TextColumn("Cuenta", width="medium"),
+                        "debit": st.column_config.NumberColumn("Debe", format="%.2f €", width="small"),
+                        "credit": st.column_config.NumberColumn("Haber", format="%.2f €", width="small"),
+                        "description": st.column_config.TextColumn("Concepto", width="large"),
+                    }
+                    st.dataframe(
+                        lineas_df[["account", "debit", "credit", "description"]],
+                        hide_index=True,
+                        use_container_width=True,
+                        column_config=column_config
+                    )
+                else:
+                    st.info("El asiento no contiene líneas contables.")
+            except Exception as e:
+                st.error(f"Error al cargar líneas del asiento: {e}")
+        else:
+            st.info("Aún no hay asientos contables registrados.")
+
+    # ────────────────────────────────────────────────────────
+    # MAYOR
+    # ────────────────────────────────────────────────────────
+    elif submenu == "Mayor":
+        try:
+            entries_user = supabase.table("journal_entries").select("id").eq("user_id", user_id).execute()
+            entry_ids = [e["id"] for e in entries_user.data] if entries_user.data else []
+            if entry_ids:
+                cuentas = supabase.table("journal_entry_lines").select("account").in_("journal_entry_id", entry_ids).execute()
+                cuentas_df = pd.DataFrame(cuentas.data) if cuentas.data else pd.DataFrame()
+            else:
+                cuentas_df = pd.DataFrame()
+
+            if not cuentas_df.empty:
+                col_sel, col_sal = st.columns([2, 1])
+                with col_sel:
+                    cuenta_sel = st.selectbox(
+                        "Selecciona la cuenta contable",
+                        sorted(cuentas_df["account"].unique()),
+                        key="mayor_cuenta"
+                    )
+
+                movs = supabase.table("journal_entry_lines").select("*, journal_entries(date)").in_("journal_entry_id", entry_ids).eq("account", cuenta_sel).execute()
+                movs_df = pd.DataFrame(movs.data) if movs.data else pd.DataFrame()
+
+                if not movs_df.empty:
+                    movs_df["date"] = movs_df["journal_entries"].apply(
+                        lambda x: x["date"] if isinstance(x, dict) else ""
+                    )
+                    movs_df["date"] = pd.to_datetime(movs_df["date"]).dt.strftime("%d/%m/%Y")
+
+                    saldo = movs_df["debit"].sum() - movs_df["credit"].sum()
+                    with col_sal:
+                        st.metric("Saldo Acumulado", money(saldo))
+
+                    column_config = {
+                        "date": st.column_config.TextColumn("Fecha", width="small"),
+                        "description": st.column_config.TextColumn("Concepto", width="large"),
+                        "debit": st.column_config.NumberColumn("Debe", format="%.2f €", width="small"),
+                        "credit": st.column_config.NumberColumn("Haber", format="%.2f €", width="small"),
+                    }
+                    st.dataframe(
+                        movs_df[["date", "description", "debit", "credit"]],
+                        hide_index=True,
+                        use_container_width=True,
+                        column_config=column_config
+                    )
+            else:
+                st.info("Sin movimientos registrados en el mayor.")
+        except Exception as e:
+            st.error(f"Error al cargar el libro mayor: {e}")
+
+    # ────────────────────────────────────────────────────────
+    # PyG Y BALANCE
+    # ────────────────────────────────────────────────────────
+    elif submenu == "PyG y Balance":
+        st.subheader("📊 Cuenta de Pérdidas y Ganancias (PyG)")
+
+        inv = get_invoices(user_id)
+        exp = get_expenses(user_id)
+
+        # Detectar años disponibles (sin modificar los DataFrames originales)
+        anios_disponibles = set()
+        if not inv.empty and "date" in inv.columns:
+            _inv_years = pd.to_datetime(inv["date"], errors="coerce").dt.year.dropna()
+            anios_disponibles.update(_inv_years.astype(int).unique())
+        if not exp.empty and "date" in exp.columns:
+            _exp_years = pd.to_datetime(exp["date"], errors="coerce").dt.year.dropna()
+            anios_disponibles.update(_exp_years.astype(int).unique())
+
+        if not anios_disponibles:
+            st.info("No hay datos contables para mostrar informes.")
+        else:
+            anios_disponibles = sorted(anios_disponibles, reverse=True)
+
+            col_filtro, _ = st.columns([1, 2])
+            with col_filtro:
+                anio_sel = st.selectbox(
+                    "📅 Ejercicio Fiscal",
+                    anios_disponibles,
+                    index=0,
+                    key="pyg_anio"
+                )
+
+            # ────────────────────────────────────────────────
+            # Motor fiscal unificado
+            # ────────────────────────────────────────────────
+            s = calculate_fiscal_summary(inv, exp, year=anio_sel)
+
+            # ────────────────────────────────────────────────
+            # Desglose de gastos por tipo
+            # ────────────────────────────────────────────────
+            exp_f = filter_by_period(exp, year=anio_sel) if not exp.empty else pd.DataFrame()
+
+            if not exp_f.empty and "expense_type" in exp_f.columns:
+                gastos_por_tipo = exp_f.groupby("expense_type")["base_amount"].sum()
+            else:
+                gastos_por_tipo = pd.Series(dtype=float)
+
+            # ────────────────────────────────────────────────
+            # Layout: desglose + resultados
+            # ────────────────────────────────────────────────
+            col1, col2 = st.columns([1.2, 1])
+
+            with col1:
+                with st.container(border=True):
+                    st.markdown("### 📥 Desglose Explotación")
+                    st.write(f"🟢 **Ventas y Servicios:** {money(s['base_ventas'])}")
+                    st.markdown("---")
+                    st.markdown("**🔴 Gastos Deducibles por Categoría:**")
+                    if not gastos_por_tipo.empty:
+                        for tipo, importe in gastos_por_tipo.items():
+                            st.write(f"• **{tipo}:** {money(importe)}")
+                    else:
+                        st.write("Sin gastos registrados.")
+                    st.markdown("---")
+                    st.write(f"**Total Gastos Deducibles:** {money(s['base_gastos'])}")
+
+            with col2:
+                with st.container(border=True):
+                    st.markdown("### 📈 Resultados del Ejercicio")
+                    st.metric("Resultado Bruto (PyG)", money(s["beneficio_bruto"]))
+                    st.caption("Beneficio antes de impuestos (Base Imponible)")
+                    st.markdown("---")
+
+                    modo_label = {
+                        "retencion_cliente": "IRPF Retenido en Facturas",
+                        "pago_fraccionado_20": "Pago Fraccionado IRPF (20%)",
+                        "sin_retencion": "Sin provisión IRPF",
+                    }.get(s["modo_provision"], "Provisión IRPF")
+
+                    st.metric(
+                        modo_label,
+                        f"-{money(s['provision_irpf'])}",
+                        help=f"Modo aplicado: {s['modo_provision']}"
+                    )
+
+                    st.markdown("---")
+                    st.metric("🔥 GANANCIA NETA ESTIMADA", money(s["ganancia_neta"]))
+
+            # ────────────────────────────────────────────────
+            # Balance resumido
+            # ────────────────────────────────────────────────
+            st.markdown("---")
+            st.subheader("⚖️ Balance de Situación (resumido)")
+
+            activo_corriente = s["total_ventas"]
+            pasivo_corriente = s["total_gastos"]
+            patrimonio_neto = activo_corriente - pasivo_corriente
+
+            col_b1, col_b2, col_b3 = st.columns([1.1, 1.1, 1.4])
+            col_b1.metric(
+                "Activo Corriente",
+                money(activo_corriente),
+                help="Facturación total acumulada con IVA"
+            )
+            col_b2.metric(
+                "Pasivo Corriente",
+                money(pasivo_corriente),
+                help="Gastos totales acumulados con IVA"
+            )
+            col_b3.metric(
+                "Patrimonio Neto",
+                money(patrimonio_neto),
+                help="Activo total menos Pasivo total"
+            )
+
+            st.caption("💡 *El Balance resumido muestra el saldo de liquidez bruta (Bases + IVA) registrado en el ejercicio.*")
+# ════════════════════════════════════════════════════════════
+# IMPUESTOS TRIMESTRALES (CORREGIDO - sin fuga de datos)
+# ════════════════════════════════════════════════════════════
+elif menu == "🏛️ Impuestos Trimestrales":
+    st.title("Liquidación Trimestral de IVA e IRPF")
+
+    hoy = date.today()
+    anio_actual = hoy.year
+    mes_actual = hoy.month
+
+    # ────────────────────────────────────────────────────────
+    # Determinar trimestre actual
+    # ────────────────────────────────────────────────────────
+    if mes_actual <= 3:
+        trimestre_actual = "1T (Ene-Mar)"
+    elif mes_actual <= 6:
+        trimestre_actual = "2T (Abr-Jun)"
+    elif mes_actual <= 9:
+        trimestre_actual = "3T (Jul-Sep)"
+    else:
+        trimestre_actual = "4T (Oct-Dic)"
+
+    # ────────────────────────────────────────────────────────
+    # Selectores de año y trimestre
+    # ────────────────────────────────────────────────────────
+    anios_disponibles = list(range(anio_actual - 5, anio_actual + 6))
+    anio = st.selectbox("Año", anios_disponibles, index=5, key="imp_anio")
+
+    trimestres = ["1T (Ene-Mar)", "2T (Abr-Jun)", "3T (Jul-Sep)", "4T (Oct-Dic)"]
+    trimestre = st.selectbox(
+        "Trimestre",
+        trimestres,
+        index=trimestres.index(trimestre_actual),
+        key="imp_trimestre"
+    )
+
+    # Número de trimestre (1-4) para pasar a fiscal_utils
+    trimestre_num = int(trimestre[0])
+
+    # ────────────────────────────────────────────────────────
+    # Motor fiscal unificado
+    # ────────────────────────────────────────────────────────
+    try:
+        s = calculate_fiscal_summary(
+            get_invoices(user_id),
+            get_expenses(user_id),
+            year=anio,
+            quarter=trimestre_num
+        )
+    except Exception as e:
+        st.error(f"Error al calcular el resumen trimestral: {e}")
+        st.stop()
+
+    # ────────────────────────────────────────────────────────
+    # Extraer valores (mismos nombres que antes para el 303)
+    # ────────────────────────────────────────────────────────
+    base_ventas     = s["base_ventas"]
+    iva_repercutido = s["iva_repercutido"]
+    base_compras    = s["base_gastos"]
+    iva_soportado   = s["iva_soportado"]
+    irpf_retenido   = s["irpf_ventas"]
+    beneficio_neto  = s["beneficio_bruto"]
+    pago_fraccionado = s["provision_irpf"]  # 20 % o retención, según corresponda
+    iva_ingresar    = max(s["iva_neto"], 0.0)
+
+    # ────────────────────────────────────────────────────────
+    # Resumen principal
+    # ────────────────────────────────────────────────────────
+    st.subheader(f"Resumen {trimestre} {anio}")
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Ventas (base)", money(base_ventas))
+    col2.metric("IVA repercutido", money(iva_repercutido))
+    col3.metric("IRPF retenido", money(irpf_retenido))
+
+    col4, col5, col6 = st.columns(3)
+    col4.metric("Compras (base)", money(base_compras))
+    col5.metric("IVA soportado", money(iva_soportado))
+    col6.metric(
+        "IVA a ingresar",
+        money(iva_ingresar),
+        delta="A compensar" if s["iva_neto"] < 0 else None,
+        delta_color="off"
+    )
+
+    st.markdown("---")
+    st.subheader("Pago fraccionado IRPF")
+
+    modo_label = {
+        "retencion_cliente": "Retención cliente",
+        "pago_fraccionado_20": "20 % modelo 130",
+        "sin_retencion": "Sin provisión",
+    }.get(s["modo_provision"], "—")
+
+    col7, col8, col9 = st.columns(3)
+    col7.metric("Beneficio neto", money(beneficio_neto))
+    col8.metric("% aplicado", modo_label)
+    col9.metric("💶 Pago fraccionado", money(pago_fraccionado))
+
+    st.caption(f"💡 Provisión IRPF calculada como: **{modo_label}**")
+
+    st.markdown("---")
+    st.subheader("📄 Modelo 303")
+
+    if st.button("Generar Modelo 303"):
+        # Cargar NIF/nombre del emisor desde settings (sin fuga de datos)
+        try:
+            config_res = (
+                supabase.table("settings")
+                .select("company_tax_id, company_name")
+                .eq("user_id", user_id)
+                .execute()
+            )
+            if config_res.data and len(config_res.data) > 0:
+                nif_emisor = config_res.data[0].get("company_tax_id", "")
+                nombre_emisor = config_res.data[0].get("company_name", "")
+            else:
+                nif_emisor = ""
+                nombre_emisor = ""
+        except Exception:
+            nif_emisor = ""
+            nombre_emisor = ""
+
+        st.markdown("### Opciones de descarga")
+        col_desc1, col_desc2 = st.columns(2)
+
+        with col_desc1:
+            st.markdown("**📄 Borrador PDF**")
+            try:
+                pdf_bytes_303 = generar_pdf_303(
+                    anio, trimestre, base_ventas, iva_repercutido,
+                    base_compras, iva_soportado, irpf_retenido,
+                    beneficio_neto, pago_fraccionado, iva_ingresar
+                )
+                if pdf_bytes_303:
+                    st.download_button(
+                        "⬇️ Descargar PDF",
+                        pdf_bytes_303,
+                        f"Modelo_303_{anio}_{trimestre.replace(' ','')}.pdf",
+                        mime="application/pdf",
+                        key="descargar_pdf_303"
+                    )
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+        with col_desc2:
+            st.markdown("**💻 Fichero AEAT**")
+            try:
+                fichero_completo = generar_fichero_aeat_303(
+                    anio, trimestre, base_ventas, iva_repercutido,
+                    base_compras, iva_soportado, nif_emisor, nombre_emisor
+                )
+                st.download_button(
+                    "⬇️ Descargar fichero",
+                    fichero_completo.encode('utf-8'),
+                    f"303_{anio}_{trimestre.replace(' ','')}.txt",
+                    mime="text/plain",
+                    key="descargar_fichero_303"
+                )
+                es_valido, mensaje = validar_fichero_aeat(fichero_completo)
+                if es_valido:
+                    st.success(mensaje)
+                else:
+                    st.warning(mensaje)
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+# ════════════════════════════════════════════════════════════
+# CONCILIACIÓN BANCARIA
+# ════════════════════════════════════════════════════════════
+elif menu == "🏦 Conciliación Bancaria":
+    st.title("Conciliación Bancaria")
+    tab1, tab2 = st.tabs(["Cargar CSV", "GoCardless"])
+    with tab1:
+        st.subheader("Cargar extracto bancario (CSV)")
+        archivo_csv = st.file_uploader("Selecciona archivo CSV", type="csv")
+        if archivo_csv:
+            try:
+                df_banco = pd.read_csv(archivo_csv)
+                st.write("Vista previa:"); st.dataframe(df_banco.head(10))
+                if st.button("Importar movimientos (CSV)"):
+                    for _, row in df_banco.iterrows():
+                        try:
+                            supabase.table("bank_transactions").insert({
+                                "user_id": user_id,
+                                "date": str(row.get("date", "")),
+                                "description": str(row.get("description", "")),
+                                "amount": float(row.get("amount", 0))
+                            }).execute()
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+                    st.success("Movimientos importados.")
+                    get_bank_transactions.clear()
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Error al leer CSV: {e}")
+    with tab2:
+        st.subheader("Importar desde GoCardless")
+        token_bancos = obtener_token_gocardless()
+        if token_bancos:
+            try:
+                bancos = obtener_bancos_disponibles(token_bancos, "ES")
+            except Exception:
+                bancos = []
+            if bancos:
+                banco_dict = {b.get("name", "Desconocido"): b.get("id", "") for b in bancos}
+                banco_seleccionado = st.selectbox("🏦 Selecciona tu banco", options=list(banco_dict.keys()))
+                if "gocardless_step" not in st.session_state:
+                    st.session_state.gocardless_step = "idle"
+                if st.session_state.gocardless_step == "idle":
+                    if st.button("🔌 Conectar con banco"):
+                        institution_id = banco_dict[banco_seleccionado]
+                        exito, link, req_id = iniciar_conexion_gocardless(institution_id)
+                        if exito:
+                            st.session_state.gocardless_link = link
+                            st.session_state.gocardless_req_id = req_id
+                            st.session_state.gocardless_step = "waiting_auth"
+                            st.rerun()
+                        else:
+                            st.error(link)
+                elif st.session_state.gocardless_step == "waiting_auth":
+                    link = st.session_state.get("gocardless_link", "#")
+                    st.info(f"🔗 [Abrir enlace de autorización]({link})")
+                    if st.button("✅ He autorizado la cuenta"):
+                        exito, mensaje, df = completar_importacion(user_id, supabase)
+                        if exito:
+                            st.success(mensaje)
+                            if df is not None and not df.empty:
+                                st.dataframe(df.head(10))
+                            st.session_state.gocardless_step = "idle"
+                            get_bank_transactions.clear()
+                        else:
+                            st.error(mensaje)
+                        st.rerun()
+            else:
+                st.info("No se pudieron cargar los bancos.")
+        else:
+            st.error("No se pudo autenticar con GoCardless.")
+    
+    st.subheader("Movimientos sin conciliar")
+    transacciones = get_bank_transactions(user_id)
+    if not transacciones.empty:
+        for idx, mov in transacciones.iterrows():
+            with st.expander(f"{mov['date']} - {mov['description']} - {money(mov['amount'])}"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    with st.form(key=f"form_fact_{idx}"):
+                        facturas = get_invoices(user_id)
+                        factura_seleccionada = st.selectbox("Emparejar con factura", ["Ninguna"] + (facturas["invoice_number"].tolist() if not facturas.empty else []), key=f"fact_{idx}")
+                        if st.form_submit_button("Vincular factura"):
+                            if factura_seleccionada != "Ninguna":
+                                id_factura = facturas.loc[facturas["invoice_number"] == factura_seleccionada, "id"].values[0]
+                                try:
+                                    supabase.table("bank_transactions").update({"matched_invoice_id": id_factura}).eq("id", mov["id"]).execute()
+                                    st.success("Factura vinculada")
+                                    get_bank_transactions.clear()
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+                with col2:
+                    with st.form(key=f"form_gasto_{idx}"):
+                        gastos = get_expenses(user_id)
+                        gasto_seleccionado = st.selectbox("Emparejar con gasto", ["Ninguno"] + (gastos["expense_number"].tolist() if not gastos.empty else []), key=f"gasto_{idx}")
+                        if st.form_submit_button("Vincular gasto"):
+                            if gasto_seleccionado != "Ninguno":
+                                id_gasto = gastos.loc[gastos["expense_number"] == gasto_seleccionado, "id"].values[0]
+                                try:
+                                    supabase.table("bank_transactions").update({"matched_expense_id": id_gasto}).eq("id", mov["id"]).execute()
+                                    st.success("Gasto vinculado")
+                                    get_bank_transactions.clear()
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+    else:
+        st.info("No hay movimientos bancarios.")
+
+# ════════════════════════════════════════════════════════════
+# DASHBOARDS DE FACTURACIÓN (PROFESIONAL Y OPTIMIZADO)
+# ════════════════════════════════════════════════════════════
+elif menu == "📊 Dashboards":
+    st.title("📊 Dashboards de Facturación")
+    st.caption("Análisis visual de rendimiento, control fiscal y estado operacional")
+
+    invoices = get_invoices(user_id)
+    expenses = get_expenses(user_id)
+
+    if invoices.empty and expenses.empty:
+        st.info("No hay datos contables registrados para generar analíticas.")
+    else:
+        # ────────────────────────────────────────────────────
+        # 🔍 Filtros interactivos
+        # ────────────────────────────────────────────────────
+        st.subheader("🔍 Filtros de Visualización")
+        col_f1, col_f2, col_f3 = st.columns(3)
+
+        with col_f1:
+            anios_disponibles = set()
+            if not invoices.empty and "date" in invoices.columns:
+                _y = pd.to_datetime(invoices["date"], errors="coerce").dt.year.dropna()
+                anios_disponibles.update(_y.astype(int).unique())
+            if not expenses.empty and "date" in expenses.columns:
+                _y = pd.to_datetime(expenses["date"], errors="coerce").dt.year.dropna()
+                anios_disponibles.update(_y.astype(int).unique())
+
+            anios_disponibles = sorted(list(anios_disponibles), reverse=True)
+            if not anios_disponibles:
+                anios_disponibles = [datetime.now().year]
+
+            year_seleccionado = st.selectbox(
+                "📅 Ejercicio Fiscal", anios_disponibles, index=0, key="dash_anio"
+            )
+
+        with col_f2:
+            mes_seleccionado = st.selectbox(
+                "📆 Período",
+                ["Todos los meses"] + LISTA_MESES,
+                index=0,
+                key="dash_mes"
+            )
+
+        with col_f3:
+            tipo_grafico = st.selectbox(
+                "📈 Tipo de Gráfica",
+                ["Barras", "Líneas", "Área"],
+                index=0,
+                key="dash_tipo"
+            )
+
+        # ────────────────────────────────────────────────────
+        # Filtrado — MISMO filtro que los KPIs (fiscal_utils)
+        # ────────────────────────────────────────────────────
+        data_inv, data_exp = get_filtered_dataframes(
+            invoices,
+            expenses,
+            year=year_seleccionado,
+            month=mes_seleccionado if mes_seleccionado != "Todos los meses" else None,
+        )
+
+        # Recalcular columnas auxiliares que las gráficas necesitan
+        if not data_inv.empty:
+            data_inv["date_dt"] = pd.to_datetime(data_inv["date"], errors="coerce")
+            data_inv["month_num"] = data_inv["date_dt"].dt.month
+            data_inv["month_name"] = data_inv["month_num"].apply(
+                lambda x: LISTA_MESES[x - 1] if pd.notnull(x) and 1 <= int(x) <= 12 else "Desconocido"
+            )
+
+        if not data_exp.empty:
+            data_exp["date_dt"] = pd.to_datetime(data_exp["date"], errors="coerce")
+            data_exp["month_num"] = data_exp["date_dt"].dt.month
+            data_exp["month_name"] = data_exp["month_num"].apply(
+                lambda x: LISTA_MESES[x - 1] if pd.notnull(x) and 1 <= int(x) <= 12 else "Desconocido"
+            )
+
+        if data_inv.empty and data_exp.empty:
+            st.warning("No hay movimientos registrados para el filtro seleccionado.")
+        else:
+            # ────────────────────────────────────────────────
+            # 📊 Indicadores Clave (KPIs) — Motor fiscal unificado
+            # ────────────────────────────────────────────────
+            st.markdown("---")
+            st.subheader("📊 Indicadores Clave")
+
+            kpi_kwargs = {"year": year_seleccionado}
+            if mes_seleccionado != "Todos los meses":
+                kpi_kwargs["month"] = mes_seleccionado
+
+            try:
+                s_kpi = calculate_fiscal_summary(
+                    invoices,
+                    expenses,
+                    **kpi_kwargs
+                )
+            except Exception as e:
+                st.error(f"Error al calcular los KPIs: {e}")
+                st.stop()
+
+            with st.container(border=True):
+                st.caption("💡 **VOLUMEN DE NEGOCIO Y EXPLOTACIÓN (CON IVA)**")
+                k1, k2, k3, k4 = st.columns(4)
+                k1.metric("🟢 Ingresos Totales", money(s_kpi["total_ventas"]))
+                k2.metric("🔴 Gastos Totales", money(s_kpi["total_gastos"]))
+                k3.metric("📄 Facturas Emitidas", f"{s_kpi['num_invoices']} uds.")
+                k4.metric("📊 Ticket Promedio", money(s_kpi["ticket_promedio"]))
+
+                st.markdown("---")
+
+                st.caption("🏛️ **RENDIMIENTO Y LIQUIDACIÓN FISCAL (BASES & IVA)**")
+                k5, k6, k7, k8 = st.columns(4)
+                k5.metric("📈 Beneficio Bruto (Base)", money(s_kpi["beneficio_bruto"]))
+                k6.metric("📄 IVA Repercutido", money(s_kpi["iva_repercutido"]))
+                k7.metric("🧾 IVA Soportado", money(s_kpi["iva_soportado"]))
+                k8.metric(
+                    "💶 IVA Neto",
+                    money(s_kpi["iva_neto"]),
+                    delta="A ingresar" if s_kpi["iva_neto"] > 0 else "A compensar",
+                    delta_color="inverse" if s_kpi["iva_neto"] > 0 else "normal"
+                )
+
+            # ────────────────────────────────────────────────
+            # Estilos gráficos integrados con Modo Oscuro ERP
+            # ────────────────────────────────────────────────
+            plt.style.use("dark_background")
+            BG_COLOR = "#0E1117"
+            CARD_BG = "#1E222D"
+            TEXT_COLOR = "#FFFFFF"
+
+            # ────────────────────────────────────────────────
+            # 📈 Gráfico Principal: Ingresos vs Gastos
+            # ────────────────────────────────────────────────
+            st.markdown("---")
+            st.subheader("📈 Comparativa Ingresos vs Gastos")
+
+            if mes_seleccionado == "Todos los meses":
+                ing_mensual = data_inv.groupby(["month_num", "month_name"])["total"].sum().reset_index() if not data_inv.empty else pd.DataFrame(columns=["month_num", "month_name", "total"])
+                gas_mensual = data_exp.groupby(["month_num", "month_name"])["total"].sum().reset_index() if not data_exp.empty else pd.DataFrame(columns=["month_num", "month_name", "total"])
+
+                meses_df = pd.DataFrame({"month_num": range(1, 13), "month_name": LISTA_MESES})
+                df_grafico = meses_df.merge(
+                    ing_mensual[["month_num", "total"]].rename(columns={"total": "ingresos"}),
+                    on="month_num", how="left"
+                )
+                df_grafico = df_grafico.merge(
+                    gas_mensual[["month_num", "total"]].rename(columns={"total": "gastos"}),
+                    on="month_num", how="left"
+                ).fillna(0)
+                x_labels = df_grafico["month_name"].tolist()
+                titulo = f"Evolución Mensual {year_seleccionado}"
+            else:
+                if not data_inv.empty:
+                    data_inv["day"] = data_inv["date_dt"].dt.day
+                    ing_diario = data_inv.groupby("day")["total"].sum().reset_index()
+                else:
+                    ing_diario = pd.DataFrame(columns=["day", "total"])
+
+                if not data_exp.empty:
+                    data_exp["day"] = data_exp["date_dt"].dt.day
+                    gas_diario = data_exp.groupby("day")["total"].sum().reset_index()
+                else:
+                    gas_diario = pd.DataFrame(columns=["day", "total"])
+
+                dias_df = pd.DataFrame({"day": range(1, 32)})
+                df_grafico = dias_df.merge(
+                    ing_diario.rename(columns={"total": "ingresos"}),
+                    on="day", how="left"
+                )
+                df_grafico = df_grafico.merge(
+                    gas_diario.rename(columns={"total": "gastos"}),
+                    on="day", how="left"
+                ).fillna(0)
+                x_labels = [str(d) for d in df_grafico["day"]]
+                titulo = f"Evolución Diaria - {mes_seleccionado} {year_seleccionado}"
+
+            if not df_grafico.empty:
+                fig, ax = plt.subplots(figsize=(12, 4.8), facecolor=BG_COLOR)
+                ax.set_facecolor(CARD_BG)
+                x_pos = range(len(x_labels))
+                width = 0.38
+
+                if tipo_grafico == "Barras":
+                    ax.bar([p - width/2 for p in x_pos], df_grafico["ingresos"], width, label="Ingresos", color="#10B981", edgecolor="none")
+                    ax.bar([p + width/2 for p in x_pos], df_grafico["gastos"], width, label="Gastos", color="#EF4444", edgecolor="none")
+                elif tipo_grafico == "Líneas":
+                    ax.plot(x_pos, df_grafico["ingresos"], marker="o", label="Ingresos", color="#10B981", linewidth=2.5)
+                    ax.plot(x_pos, df_grafico["gastos"], marker="s", label="Gastos", color="#EF4444", linewidth=2.5)
+                else:
+                    ax.fill_between(x_pos, df_grafico["ingresos"], alpha=0.4, label="Ingresos", color="#10B981")
+                    ax.fill_between(x_pos, df_grafico["gastos"], alpha=0.4, label="Gastos", color="#EF4444")
+
+                ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:,.0f} €".replace(",", ".")))
+                ax.set_xticks(x_pos)
+                ax.set_xticklabels(x_labels, rotation=35, ha="right", color=TEXT_COLOR, fontsize=9)
+                ax.tick_params(colors=TEXT_COLOR)
+                ax.set_title(titulo, fontweight="bold", fontsize=12, pad=12, color=TEXT_COLOR)
+                ax.legend(facecolor=CARD_BG, edgecolor="none", labelcolor=TEXT_COLOR)
+                ax.grid(axis="y", linestyle="--", alpha=0.2, color="#FFFFFF")
+
+                for spine in ["top", "right", "left", "bottom"]:
+                    ax.spines[spine].set_visible(False)
+
+                fig.tight_layout()
+                st.pyplot(fig)
+
+            # ────────────────────────────────────────────────
+            # 🏆 Subgráficos Secundarios
+            # ────────────────────────────────────────────────
+            st.markdown("---")
+            col_g1, col_g2 = st.columns(2)
+
+            with col_g1:
+                st.subheader("🏆 Top Clientes por Facturación")
+                col_cliente = "client_name" if "client_name" in data_inv.columns else ("cliente" if "cliente" in data_inv.columns else None)
+
+                if not data_inv.empty and col_cliente:
+                    top_clientes = data_inv.groupby(col_cliente)["total"].sum().sort_values(ascending=False).head(5)
+                    if not top_clientes.empty:
+                        fig2, ax2 = plt.subplots(figsize=(7, 4.2), facecolor=BG_COLOR)
+                        ax2.set_facecolor(CARD_BG)
+
+                        nombres_cortos = [str(n)[:25] + "..." if len(str(n)) > 25 else str(n) for n in top_clientes.index]
+                        bars = ax2.barh(range(len(top_clientes)), top_clientes.values, color="#3B82F6", height=0.55)
+
+                        ax2.set_yticks(range(len(top_clientes)))
+                        ax2.set_yticklabels(nombres_cortos, fontsize=9, color=TEXT_COLOR)
+                        ax2.invert_yaxis()
+                        ax2.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:,.0f} €"))
+                        ax2.tick_params(colors=TEXT_COLOR)
+                        ax2.grid(axis="x", linestyle="--", alpha=0.2, color="#FFFFFF")
+
+                        for spine in ["top", "right", "left", "bottom"]:
+                            ax2.spines[spine].set_visible(False)
+
+                        fig2.tight_layout()
+                        st.pyplot(fig2)
+                    else:
+                        st.info("Sin registros de clientes en este período.")
+                else:
+                    st.info("No se dispone de datos de clientes para este filtro.")
+
+            with col_g2:
+                st.subheader("📊 Estado de Facturas")
+                if not data_inv.empty and "status" in data_inv.columns:
+                    estados = data_inv["status"].value_counts()
+                    if not estados.empty:
+                        fig3, ax3 = plt.subplots(figsize=(7, 4.2), facecolor=BG_COLOR)
+                        ax3.set_facecolor(CARD_BG)
+
+                        colores_dict = {
+                            "pagada": "#10B981",
+                            "pendiente": "#F59E0B",
+                            "vencida": "#EF4444",
+                            "anulada": "#6B7280",
+                            "rectificada": "#3B82F6"
+                        }
+                        colors_list = [colores_dict.get(str(e).lower(), "#9CA3AF") for e in estados.index]
+
+                        wedges, texts, autotexts = ax3.pie(
+                            estados.values,
+                            labels=estados.index,
+                            autopct='%1.1f%%',
+                            colors=colors_list,
+                            startangle=90,
+                            textprops=dict(color=TEXT_COLOR)
+                        )
+
+                        for autotext in autotexts:
+                            autotext.set_color('#FFFFFF')
+                            autotext.set_weight('bold')
+
+                        fig3.tight_layout()
+                        st.pyplot(fig3)
+                    else:
+                        st.info("Sin estados de facturación registrados.")
+                else:
+                    st.info("No hay columna de estado en las facturas.")
+# ════════════════════════════════════════════════════════════
+# PRESUPUESTOS (CORREGIDO - sin fuga de datos)
+# ════════════════════════════════════════════════════════════
+elif menu == "📝 Presupuestos":
+    st.title("📝 Presupuestos")
+    
+    # CORRECCIÓN FUGA DE DATOS: sin AUTONOMO_NAME ni AUTONOMO_TAX_ID
+    try:
+        config_res = supabase.table("settings").select("*").eq("user_id", user_id).execute()
+        if config_res.data and len(config_res.data) > 0:
+            empresa = config_res.data[0]
+            if "user_id" not in empresa:
+                empresa["user_id"] = user_id
+        else:
+            empresa = {"user_id": user_id, "company_name": "", "company_tax_id": "", "company_address": "", "company_iban": "", "company_phone": "", "company_email": "", "company_logo": ""}
+    except Exception:
+        empresa = {"user_id": user_id, "company_name": "", "company_tax_id": "", "company_address": "", "company_iban": "", "company_phone": "", "company_email": "", "company_logo": ""}
+
+    # ============================================================
+    # GESTIÓN DE ESTADO PARA EDICIÓN
+    # ============================================================
+    if "editing_budget_id" not in st.session_state:
+        st.session_state.editing_budget_id = None
+    if "edit_budget_data" not in st.session_state:
+        st.session_state.edit_budget_data = None
+    if "budget_number_editing" not in st.session_state:
+        st.session_state.budget_number_editing = None
+
+    def limpiar_estado_edicion():
+        """Limpia el estado de edición y sus claves de widgets."""
+        st.session_state.editing_budget_id = None
+        st.session_state.edit_budget_data = None
+        st.session_state.budget_number_editing = None
+        
+        keys_to_clear = [k for k in st.session_state.keys() if k.startswith("eh_")]
+        for key in keys_to_clear:
+            if key in st.session_state:
+                del st.session_state[key]
+
+    tab_nuevo, tab_historial = st.tabs(["➕ Nuevo presupuesto", "📋 Historial de presupuestos"])
+
+    # ============================================================
+    # TAB 1: NUEVO PRESUPUESTO
+    # ============================================================
+    with tab_nuevo:
+        clientes_df = get_clients(user_id)
+        productos_df = get_products(user_id)
+        if not productos_df.empty:
+            for col in ["description", "price", "default_vat_percentage", "default_irpf_percentage"]:
+                if col not in productos_df.columns:
+                    productos_df[col] = "" if col == "description" else 0.0
+
+        st.subheader("Datos del cliente")
+        modo_cliente_nuevo = st.radio(
+            "Seleccionar cliente",
+            ["Existente", "Nuevo (manual)"],
+            horizontal=True,
+            key="modo_cliente_nuevo"
+        )
+        
+        if modo_cliente_nuevo == "Existente":
+            if clientes_df.empty:
+                cliente_nuevo = {"name": "", "tax_id": "", "address": ""}
+            else:
+                cliente_sel = st.selectbox("Cliente", clientes_df["name"].tolist(), key="cliente_select_nuevo")
+                cliente_row = clientes_df[clientes_df["name"] == cliente_sel].iloc[0]
+                cliente_nuevo = {"name": cliente_row["name"], "tax_id": cliente_row["tax_id"], "address": cliente_row["address"]}
+        else:
+            cliente_nuevo = {
+                "name": st.text_input("Nombre/Razón Social", key="manual_name_nuevo"),
+                "tax_id": st.text_input("RTN / NIF", key="manual_taxid_nuevo"),
+                "address": st.text_input("Dirección", key="manual_address_nuevo")
+            }
+
+        fecha_nueva = st.date_input("Fecha del presupuesto", value=date.today(), key="fecha_nuevo")
+        
+        st.markdown("---")
+        st.subheader("Líneas del presupuesto")
+        num_lineas_nuevo = st.number_input("Número de líneas", min_value=1, max_value=20, value=1, key="num_lineas_nuevo")
+        
+        lista_productos = ["-- Manual --"]
+        if not productos_df.empty:
+            lista_productos += productos_df["name"].tolist()
+        
+        lineas_nuevas = []
+        for i in range(int(num_lineas_nuevo)):
+            cols = st.columns([3, 2, 2, 2])
+            with cols[0]:
+                prod_sel = st.selectbox(f"Producto {i+1}", lista_productos, key=f"new_prod_{i}")
+                if prod_sel == "-- Manual --":
+                    desc_manual = st.text_input(f"Descripción {i+1}", key=f"new_desc_{i}")
+                else:
+                    prod_info = productos_df[productos_df["name"] == prod_sel]
+                    desc_prod = prod_info.iloc[0].get("description", "") if not prod_info.empty else ""
+                    desc_manual = st.text_area(f"Descripción {i+1} (editable)", value=desc_prod, key=f"new_desc_{i}", height=80)
+            
+            with cols[1]:
+                cantidad = st.number_input(f"Cantidad {i+1}", min_value=1.0, value=1.0, key=f"new_qty_{i}")
+            
+            with cols[2]:
+                if prod_sel != "-- Manual --" and not productos_df.empty:
+                    prod_row = productos_df[productos_df["name"] == prod_sel]
+                    p_def = prod_row.iloc[0]["price"] if not prod_row.empty else 0.0
+                    v_def = prod_row.iloc[0]["default_vat_percentage"] if not prod_row.empty else 21.0
+                else:
+                    p_def, v_def = 0.0, 21.0
+                
+                precio = st.number_input(f"Precio ud. {i+1}", min_value=0.0, value=float(p_def), key=f"new_price_{i}")
+                vat = st.number_input(f"IVA % {i+1}", value=float(v_def), key=f"new_vat_{i}")
+                irpf = st.number_input(f"IRPF % {i+1}", value=0.0, key=f"new_irpf_{i}")
+            
+            with cols[3]:
+                base_l = cantidad * precio
+                vat_a = base_l * vat / 100
+                irpf_a = base_l * irpf / 100
+                total_l = base_l + vat_a - irpf_a
+                st.text(f"Total: {money(total_l)}")
+            
+            desc_lin = f"{prod_sel}\n{desc_manual.strip()}" if prod_sel != "-- Manual --" and desc_manual.strip() else (desc_manual.strip() if desc_manual.strip() else prod_sel)
+            lineas_nuevas.append({
+                "description": desc_lin, "quantity": cantidad, "unit_price": precio,
+                "base_amount": base_l, "vat_percentage": vat, "vat_amount": vat_a,
+                "irpf_percentage": irpf, "irpf_amount": irpf_a, "total": total_l
+            })
+
+        base_tot_n = sum(l["base_amount"] for l in lineas_nuevas)
+        vat_tot_n = sum(l["vat_amount"] for l in lineas_nuevas)
+        irpf_tot_n = sum(l["irpf_amount"] for l in lineas_nuevas)
+        tot_n = base_tot_n + vat_tot_n - irpf_tot_n
+
+        st.markdown("---")
+        if st.button("💾 Guardar presupuesto", key="btn_guardar_nuevo"):
+            if not validar_nif_cif(cliente_nuevo.get("tax_id", "")):
+                st.error("El NIF del cliente no es válido.")
+            else:
+                b_num = obtener_siguiente_numero_presupuesto(user_id)
+                data = {
+                    "user_id": user_id, "budget_number": b_num, "date": str(fecha_nueva),
+                    "client_name": cliente_nuevo.get("name", ""), "client_tax_id": cliente_nuevo.get("tax_id", ""),
+                    "client_address": cliente_nuevo.get("address", ""), "lines": json.dumps(lineas_nuevas),
+                    "base_total": base_tot_n, "vat_total": vat_tot_n, "irpf_total": irpf_tot_n, "total": tot_n,
+                    "vat_pct": lineas_nuevas[0]["vat_percentage"] if lineas_nuevas else 21,
+                    "irpf_pct": lineas_nuevas[0]["irpf_percentage"] if lineas_nuevas else 0,
+                    "status": "pendiente"
+                }
+                try:
+                    supabase.table("budgets").insert(data).execute()
+                    st.success(f"Presupuesto {b_num} guardado correctamente.")
+                    get_budgets.clear()
+                    time.sleep(0.5)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error al guardar: {e}")
+
+    # ============================================================
+    # TAB 2: HISTORIAL Y EDICIÓN INTEGRADA
+    # ============================================================
+    with tab_historial:
+        if st.session_state.editing_budget_id and st.session_state.edit_budget_data:
+            budget_data = st.session_state.edit_budget_data
+            b_num_edit = st.session_state.budget_number_editing
+            
+            st.warning(f"✏️ **Editando presupuesto {b_num_edit}**")
+            
+            col_canc, _ = st.columns([1, 3])
+            with col_canc:
+                if st.button("❌ Cancelar edición", key="eh_cancel_btn", use_container_width=True):
+                    limpiar_estado_edicion()
+                    st.rerun()
+
+            clientes_df = get_clients(user_id)
+            productos_df = get_products(user_id)
+            if not productos_df.empty:
+                for col in ["description", "price", "default_vat_percentage", "default_irpf_percentage"]:
+                    if col not in productos_df.columns:
+                        productos_df[col] = "" if col == "description" else 0.0
+
+            lineas_pre = json.loads(budget_data.get("lines", "[]")) if budget_data.get("lines") else []
+            fecha_pre = budget_data.get("date", str(date.today()))
+            try:
+                fecha_pre_dt = datetime.strptime(fecha_pre, "%Y-%m-%d").date()
+            except:
+                fecha_pre_dt = date.today()
+
+            st.markdown("---")
+            st.subheader("Datos del cliente")
+            
+            modo_cli_edit = st.radio(
+                "Seleccionar cliente",
+                ["Existente", "Nuevo (manual)"],
+                horizontal=True,
+                key="eh_modo_cliente"
+            )
+            
+            if modo_cli_edit == "Existente":
+                if clientes_df.empty:
+                    cliente_edit = {"name": "", "tax_id": "", "address": ""}
+                else:
+                    cli_default = budget_data.get("client_name", "")
+                    cli_list = clientes_df["name"].tolist()
+                    idx_cli = cli_list.index(cli_default) if cli_default in cli_list else 0
+                    
+                    cli_sel = st.selectbox("Cliente", cli_list, index=idx_cli, key="eh_cliente_select")
+                    cli_row = clientes_df[clientes_df["name"] == cli_sel].iloc[0]
+                    cliente_edit = {"name": cli_row["name"], "tax_id": cli_row["tax_id"], "address": cli_row["address"]}
+            else:
+                cliente_edit = {
+                    "name": st.text_input("Nombre/Razón Social", value=budget_data.get("client_name", ""), key="eh_manual_name"),
+                    "tax_id": st.text_input("RTN / NIF", value=budget_data.get("client_tax_id", ""), key="eh_manual_taxid"),
+                    "address": st.text_input("Dirección", value=budget_data.get("client_address", ""), key="eh_manual_address")
+                }
+
+            fecha_edit = st.date_input("Fecha del presupuesto", value=fecha_pre_dt, key="eh_fecha")
+            
+            st.markdown("---")
+            st.subheader("Líneas del presupuesto")
+            num_lineas_edit = st.number_input("Número de líneas", min_value=1, max_value=20, value=max(len(lineas_pre), 1), key="eh_num_lineas")
+            
+            lista_prods = ["-- Manual --"]
+            if not productos_df.empty:
+                lista_prods += productos_df["name"].tolist()
+            
+            lineas_editadas = []
+            for i in range(int(num_lineas_edit)):
+                lin_p = lineas_pre[i] if i < len(lineas_pre) else None
+                cols = st.columns([3, 2, 2, 2])
+                
+                with cols[0]:
+                    p_def = "-- Manual --"
+                    if lin_p and lin_p.get("description"):
+                        d_text = lin_p.get("description", "")
+                        for p in lista_prods:
+                            if p != "-- Manual --" and p in d_text:
+                                p_def = p
+                                break
+                    
+                    prod_sel = st.selectbox(f"Producto {i+1}", lista_prods, index=lista_prods.index(p_def) if p_def in lista_prods else 0, key=f"eh_prod_{i}")
+                    
+                    if prod_sel == "-- Manual --":
+                        desc_manual = st.text_input(f"Descripción {i+1}", value=lin_p.get("description", "") if lin_p else "", key=f"eh_desc_{i}")
+                    else:
+                        p_info = productos_df[productos_df["name"] == prod_sel]
+                        d_prod = p_info.iloc[0].get("description", "") if not p_info.empty else ""
+                        desc_manual = st.text_area(f"Descripción {i+1} (editable)", value=lin_p.get("description", "") if lin_p else d_prod, key=f"eh_desc_{i}", height=80)
+                
+                with cols[1]:
+                    cant = st.number_input(f"Cantidad {i+1}", min_value=1.0, value=float(lin_p["quantity"]) if lin_p else 1.0, key=f"eh_qty_{i}")
+                
+                with cols[2]:
+                    pr_val = float(lin_p["unit_price"]) if lin_p else 0.0
+                    vat_val = float(lin_p.get("vat_percentage", 21)) if lin_p else 21.0
+                    irpf_val = float(lin_p.get("irpf_percentage", 0)) if lin_p else 0.0
+                    
+                    precio = st.number_input(f"Precio ud. {i+1}", min_value=0.0, value=pr_val, key=f"eh_price_{i}")
+                    vat = st.number_input(f"IVA % {i+1}", value=vat_val, key=f"eh_vat_{i}")
+                    irpf = st.number_input(f"IRPF % {i+1}", value=irpf_val, key=f"eh_irpf_{i}")
+                
+                with cols[3]:
+                    b_lin = cant * precio
+                    v_amt = b_lin * vat / 100
+                    i_amt = b_lin * irpf / 100
+                    t_lin = b_lin + v_amt - i_amt
+                    st.text(f"Total: {money(t_lin)}")
+                
+                desc_final = f"{prod_sel}\n{desc_manual.strip()}" if prod_sel != "-- Manual --" and desc_manual.strip() else (desc_manual.strip() if desc_manual.strip() else prod_sel)
+                lineas_editadas.append({
+                    "description": desc_final, "quantity": cant, "unit_price": precio,
+                    "base_amount": b_lin, "vat_percentage": vat, "vat_amount": v_amt,
+                    "irpf_percentage": irpf, "irpf_amount": i_amt, "total": t_lin
+                })
+
+            base_tot_e = sum(l["base_amount"] for l in lineas_editadas)
+            vat_tot_e = sum(l["vat_amount"] for l in lineas_editadas)
+            irpf_tot_e = sum(l["irpf_amount"] for l in lineas_editadas)
+            tot_e = base_tot_e + vat_tot_e - irpf_tot_e
+
+            st.markdown("---")
+            col_save, col_cancel = st.columns(2)
+            with col_save:
+                if st.button("💾 Guardar cambios", key="eh_save_btn", use_container_width=True):
+                    if not validar_nif_cif(cliente_edit.get("tax_id", "")):
+                        st.error("El NIF del cliente no es válido.")
+                    else:
+                        try:
+                            supabase.table("budgets").update({
+                                "date": str(fecha_edit),
+                                "client_name": cliente_edit.get("name", ""),
+                                "client_tax_id": cliente_edit.get("tax_id", ""),
+                                "client_address": cliente_edit.get("address", ""),
+                                "lines": json.dumps(lineas_editadas),
+                                "base_total": base_tot_e,
+                                "vat_total": vat_tot_e,
+                                "irpf_total": irpf_tot_e,
+                                "total": tot_e,
+                                "vat_pct": lineas_editadas[0]["vat_percentage"] if lineas_editadas else 21,
+                                "irpf_pct": lineas_editadas[0]["irpf_percentage"] if lineas_editadas else 0,
+                            }).eq("id", st.session_state.editing_budget_id).execute()
+                            
+                            st.success(f"Presupuesto {b_num_edit} actualizado correctamente.")
+                            limpiar_estado_edicion()
+                            get_budgets.clear()
+                            time.sleep(0.5)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error al actualizar: {e}")
+            
+            with col_cancel:
+                if st.button("❌ Cancelar", key="eh_cancel_bottom_btn", use_container_width=True):
+                    limpiar_estado_edicion()
+                    st.rerun()
+
+        else:
+            st.subheader("Presupuestos guardados")
+            budgets_df = get_budgets(user_id)
+            
+            if not budgets_df.empty:
+                budgets_display = budgets_df[["budget_number", "date", "client_name", "total", "status"]].copy()
+                budgets_display.columns = ["Nº Presupuesto", "Fecha", "Cliente", "Total", "Estado"]
+                budgets_display["Fecha"] = pd.to_datetime(budgets_display["Fecha"]).dt.strftime("%d/%m/%Y")
+                
+                column_config = {
+                    "Nº Presupuesto": st.column_config.TextColumn("Nº Presupuesto", width="small"),
+                    "Fecha": st.column_config.TextColumn("Fecha", width="small"),
+                    "Cliente": st.column_config.TextColumn("Cliente", width="medium"),
+                    "Total": st.column_config.NumberColumn("Total", format="%.2f €", width="small"),
+                    "Estado": st.column_config.TextColumn("Estado", width="small"),
+                }
+                
+                event = st.dataframe(
+                    budgets_display,
+                    hide_index=True,
+                    use_container_width=True,
+                    column_config=column_config,
+                    selection_mode="single-row",
+                    on_select="rerun",
+                    key="budgets_table_historial_v2"
+                )
+                
+                if (event.selection and event.selection.rows and len(event.selection.rows) > 0):
+                    selected_row = event.selection.rows[0]
+                    if selected_row is not None and 0 <= selected_row < len(budgets_df):
+                        budget_row = budgets_df.iloc[selected_row]
+                        budget_id = budget_row["id"]
+                        budget_number_sel = budget_row["budget_number"]
+                        
+                        try:
+                            resp = supabase.table("budgets").select("*").eq("id", budget_id).single().execute()
+                            budget_data = resp.data if resp.data else budget_row.to_dict()
+                        except Exception:
+                            budget_data = budget_row.to_dict()
+                        
+                        st.markdown("---")
+                        
+                        with st.container(border=True):
+                            col_info1, col_info2 = st.columns(2)
+                            
+                            with col_info1:
+                                st.markdown(f"### 📄 Presupuesto {budget_number_sel}")
+                                st.markdown(f"**Fecha:** {pd.to_datetime(budget_data.get('date', '')).strftime('%d/%m/%Y') if budget_data.get('date') else 'N/A'}")
+                                st.markdown(f"**Estado:** {budget_data.get('status', 'pendiente')}")
+                            
+                            with col_info2:
+                                st.markdown(f"**Cliente:** {budget_data.get('client_name', 'N/A')}")
+                                st.markdown(f"**NIF/CIF:** {budget_data.get('client_tax_id', 'N/A')}")
+                                st.markdown(f"**Dirección:** {budget_data.get('client_address', 'N/A')}")
+                            
+                            st.markdown("---")
+                            
+                            try:
+                                lineas_db = json.loads(budget_data.get("lines", "[]"))
+                                if lineas_db:
+                                    lineas_hist_df = pd.DataFrame(lineas_db)
+                                    columnas_necesarias = ["description", "quantity", "unit_price", "total"]
+                                    for col in columnas_necesarias:
+                                        if col not in lineas_hist_df.columns:
+                                            lineas_hist_df[col] = 0 if col != "description" else ""
+                                    
+                                    hist_display = lineas_hist_df[columnas_necesarias].copy()
+                                    hist_display.columns = ["Descripción", "Cant.", "Precio ud.", "Total"]
+                                    hist_display["Precio ud."] = hist_display["Precio ud."].apply(lambda x: f"{float(x):,.2f} €")
+                                    hist_display["Total"] = hist_display["Total"].apply(lambda x: f"{float(x):,.2f} €")
+                                    
+                                    st.dataframe(hist_display, hide_index=True, use_container_width=True)
+                                
+                                st.markdown("---")
+                                col_tot_hist1, col_tot_hist2 = st.columns([2, 1])
+                                
+                                with col_tot_hist2:
+                                    st.markdown("### Resumen")
+                                    st.markdown(f"**Base imponible:** {money(budget_data.get('base_total', 0))}")
+                                    st.markdown(f"**IVA ({budget_data.get('vat_pct', 21):.2f}%):** {money(budget_data.get('vat_total', 0))}")
+                                    irpf_hist = budget_data.get('irpf_total', 0)
+                                    if irpf_hist and irpf_hist > 0:
+                                        st.markdown(f"**IRPF:** -{money(irpf_hist)}")
+                                    st.markdown("---")
+                                    st.markdown(f"## **TOTAL: {money(budget_data.get('total', 0))}**")
+                            except Exception as e:
+                                st.warning(f"No se pudieron cargar las líneas: {e}")
+                        
+                        st.markdown("---")
+                        
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            if st.button("✏️ Editar", key=f"edit_btn_v2_{budget_id}"):
+                                st.session_state.editing_budget_id = budget_id
+                                st.session_state.edit_budget_data = budget_data
+                                st.session_state.budget_number_editing = budget_number_sel
+                                st.rerun()
+                        
+                        with col2:
+                            confirmado = st.checkbox("Confirmar eliminación", key=f"confirm_del_btn_v2_{budget_id}")
+                            if st.button("🗑️ Eliminar", key=f"del_btn_v2_{budget_id}", disabled=not confirmado):
+                                try:
+                                    supabase.table("budgets").delete().eq("id", budget_id).execute()
+                                    st.success("Presupuesto eliminado.")
+                                    get_budgets.clear()
+                                    time.sleep(0.5)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+                        
+                        with col3:
+                            try:
+                                cliente_pdf = {"name": budget_data.get("client_name", ""), "tax_id": budget_data.get("client_tax_id", ""), "address": budget_data.get("client_address", "")}
+                                lineas_pdf = json.loads(budget_data.get("lines", "[]"))
+                                
+                                pdf_bytes_hist = make_budget_pdf(
+                                    empresa, cliente_pdf, lineas_pdf,
+                                    budget_data.get("base_total", 0),
+                                    budget_data.get("vat_total", 0),
+                                    budget_data.get("total", 0),
+                                    budget_data.get("vat_pct", 21),
+                                    budget_number=budget_number_sel
+                                )
+                                
+                                if pdf_bytes_hist:
+                                    st.download_button(
+                                        "📄 Descargar PDF",
+                                        pdf_bytes_hist,
+                                        f"Presupuesto_{budget_number_sel}.pdf",
+                                        mime="application/pdf",
+                                        key=f"download_hist_v2_{budget_id}"
+                                    )
+                            except Exception as e:
+                                st.error(f"Error al generar PDF: {e}")
+                        
+                        st.markdown("---")
+                        col_status1, col_status2 = st.columns([1, 2])
+                        
+                        with col_status1:
+                            estado_actual = budget_data.get("status", "pendiente")
+                            nuevo_estado = st.radio(
+                                "Estado del presupuesto",
+                                ["pendiente", "aceptado"],
+                                index=0 if estado_actual != "aceptado" else 1,
+                                horizontal=True,
+                                key=f"estado_radio_v2_{budget_id}"
+                            )
+                        
+                        with col_status2:
+                            if st.button("💾 Actualizar estado", key=f"estado_btn_v2_{budget_id}"):
+                                try:
+                                    supabase.table("budgets").update({"status": nuevo_estado}).eq("id", budget_id).execute()
+                                    st.success(f"Estado actualizado a: {nuevo_estado}")
+                                    get_budgets.clear()
+                                    time.sleep(0.5)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error al actualizar estado: {e}")
+                        
+                        st.markdown("---")
+                        col_email1, col_email2 = st.columns([2, 1])
+                        
+                        with col_email1:
+                            email_cliente = st.text_input("Email del cliente", key=f"email_cliente_v2_{budget_id}", placeholder="cliente@ejemplo.com")
+                        
+                        with col_email2:
+                            if st.button("📧 Enviar por email", key=f"email_btn_v2_{budget_id}"):
+                                if not email_cliente or "@" not in email_cliente:
+                                    st.error("Introduce un email válido.")
+                                else:
+                                    if pdf_bytes_hist:
+                                        with st.spinner("Enviando..."):
+                                            exito = enviar_factura_email(
+                                                email_cliente,
+                                                f"Presupuesto {budget_number_sel}",
+                                                "Adjunto le enviamos el presupuesto solicitado.",
+                                                pdf_bytes_hist,
+                                                f"Presupuesto_{budget_number_sel}.pdf"
+                                            )
+                                        if exito:
+                                            st.success(f"Presupuesto enviado a {email_cliente}")
+                                        else:
+                                            st.error("No se pudo enviar el email")
+                                    else:
+                                        st.error("Primero genera el PDF.")
+            else:
+                st.info("No hay presupuestos guardados aún.")
+
+# ════════════════════════════════════════════════════════════
+# COLABORADORES
+# ════════════════════════════════════════════════════════════
+elif menu == "👥 Colaboradores":
+    st.title("Colaboradores")
+    st.info("Funcionalidad en desarrollo.")
+
+# ════════════════════════════════════════════════════════════
+# PANEL DE ADMINISTRACIÓN
+# ════════════════════════════════════════════════════════════
+elif menu == "🔐 Panel Admin":
+    st.title("🔐 Panel de Administración")
+    
+    ADMIN_EMAILS = ["esamanzanarez@gmail.com", "admin@hondureformas.com"]
+    
+    es_admin = False
+    try:
+        email_actual = st.session_state.user.email.lower() if st.session_state.user.email else ""
+        es_admin = email_actual in [e.lower() for e in ADMIN_EMAILS]
+        if not es_admin:
+            try:
+                role_res = supabase.table("user_roles").select("role").eq("user_id", user_id).single().execute()
+                es_admin = role_res.data.get("role") == "admin" if role_res.data else False
+            except Exception:
+                es_admin = False
+    except Exception:
+        es_admin = False
+    
+    if not es_admin:
+        st.error("❌ No tienes permisos para acceder a esta sección.")
+        st.stop()
+    
+    st.success(f"✅ Acceso concedido como administrador: {st.session_state.user.email}")
+    
+    from supabase import create_client
+    
+    def get_admin_client():
+        try:
+            SUPABASE_URL = st.secrets["SUPABASE_URL"]
+            SERVICE_ROLE_KEY = st.secrets["SUPABASE_SERVICE_ROLE_KEY"]
+            return create_client(SUPABASE_URL, SERVICE_ROLE_KEY)
+        except Exception:
+            return supabase
+    
+    admin_client = get_admin_client()
+    
+    PRECIOS_PLANES = {"free": 0, "basico": 15, "profesional": 30, "gestoria": 60}
+    
+    def registrar_accion_admin(accion, user_id_afectado, detalles=""):
+        try:
+            admin_client.table("admin_actions").insert({
+                "admin_id": user_id,
+                "user_id": user_id_afectado,
+                "action_type": accion,
+                "action_details": detalles
+            }).execute()
+        except Exception:
+            pass
+    
+    tab_resumen, tab_usuarios, tab_suscripciones, tab_logs = st.tabs(["📊 Resumen", "👥 Usuarios", "💳 Suscripciones", "⚠️ Logs"])
+    
+    # TAB RESUMEN
+    with tab_resumen:
+        st.subheader("📊 Visión General")
+        mrr = 0
+        usuarios_activos = 0
+        try:
+            subs_res = admin_client.table("subscriptions").select("plan, status").execute()
+            if subs_res.data:
+                for s in subs_res.data:
+                    if s["status"] == "active" and s["plan"] in PRECIOS_PLANES:
+                        mrr += PRECIOS_PLANES[s["plan"]]
+                    if s["status"] == "active":
+                        usuarios_activos += 1
+        except Exception:
+            pass
+        
+        mes_actual_nombre = LISTA_MESES[date.today().month - 1]
+        try:
+            facturas_mes = admin_client.table("invoices_v2").select("id").eq("month", mes_actual_nombre).execute()
+            num_facturas_mes = len(facturas_mes.data) if facturas_mes.data else 0
+        except Exception:
+            num_facturas_mes = 0
+        
+        col_k1, col_k2, col_k3 = st.columns(3)
+        col_k1.metric("💰 MRR", f"{mrr:,.0f} €/mes")
+        col_k2.metric("👥 Usuarios Activos", usuarios_activos)
+        col_k3.metric("📄 Facturas este mes", num_facturas_mes)
+    
+    # TAB USUARIOS (INTERACTIVO CON SELECCIÓN)
+    with tab_usuarios:
+        st.subheader("👥 Gestión de Usuarios")
+        try:
+            usuarios = []
+            try:
+                users_view_res = admin_client.table("users_view").select("*").execute()
+                users_view_data = users_view_res.data if users_view_res.data else []
+            except Exception:
+                users_view_data = []
+            
+            try:
+                roles_res = admin_client.table("user_roles").select("user_id, role").execute()
+                roles_dict = {r["user_id"]: r["role"] for r in roles_res.data} if roles_res.data else {}
+            except Exception:
+                roles_dict = {}
+            
+            try:
+                subs_res = admin_client.table("subscriptions").select("user_id, plan, status").execute()
+                subs_dict = {s["user_id"]: {"plan": s["plan"], "status": s["status"]} for s in subs_res.data} if subs_res.data else {}
+            except Exception:
+                subs_dict = {}
+            
+            try:
+                settings_res = admin_client.table("settings").select("user_id, company_name, company_tax_id, company_email").execute()
+                settings_dict = {s["user_id"]: {"company_name": s.get("company_name", ""), "company_tax_id": s.get("company_tax_id", ""), "company_email": s.get("company_email", "")} for s in settings_res.data} if settings_res.data else {}
+            except Exception:
+                settings_dict = {}
+            
+            if users_view_data:
+                for u in users_view_data:
+                    uid = u.get("id", "")
+                    email = u.get("email", "")
+                    role = roles_dict.get(uid, "cliente")
+                    sub_info = subs_dict.get(uid, {"plan": "free", "status": "active"})
+                    setting_info = settings_dict.get(uid, {"company_name": "", "company_tax_id": "", "company_email": email})
+                    usuarios.append({
+                        "id": uid,
+                        "email": setting_info.get("company_email", "") or email,
+                        "company_name": setting_info.get("company_name", ""),
+                        "company_tax_id": setting_info.get("company_tax_id", ""),
+                        "role": role,
+                        "plan": sub_info.get("plan", "free"),
+                        "status": sub_info.get("status", "active"),
+                    })
+            else:
+                all_user_ids = set()
+                all_user_ids.update(roles_dict.keys())
+                all_user_ids.update(subs_dict.keys())
+                all_user_ids.update(settings_dict.keys())
+                for uid in all_user_ids:
+                    setting_info = settings_dict.get(uid, {"company_name": "", "company_tax_id": "", "company_email": ""})
+                    sub_info = subs_dict.get(uid, {"plan": "free", "status": "active"})
+                    usuarios.append({
+                        "id": uid,
+                        "email": setting_info.get("company_email", ""),
+                        "company_name": setting_info.get("company_name", ""),
+                        "company_tax_id": setting_info.get("company_tax_id", ""),
+                        "role": roles_dict.get(uid, "cliente"),
+                        "plan": sub_info.get("plan", "free"),
+                        "status": sub_info.get("status", "active"),
+                    })
+            
+            if usuarios:
+                st.success(f"✅ Se encontraron {len(usuarios)} usuarios")
+                busqueda = st.text_input("🔍 Buscar por email, nombre o CIF", key="busqueda_admin_usuarios")
+                usuarios_filtrados = usuarios
+                if busqueda:
+                    bl = busqueda.lower()
+                    usuarios_filtrados = [u for u in usuarios if bl in (u["email"] or "").lower() or bl in (u["company_name"] or "").lower() or bl in (u["company_tax_id"] or "").lower()]
+                
+                usuarios_df = pd.DataFrame(usuarios_filtrados)
+                
+                # Tabla interactiva con selección de fila
+                event = st.dataframe(
+                    usuarios_df[["email", "company_name", "company_tax_id", "plan", "role", "status"]],
+                    column_config={
+                        "email": st.column_config.TextColumn("Correo Electrónico"),
+                        "company_name": st.column_config.TextColumn("Empresa"),
+                        "company_tax_id": st.column_config.TextColumn("CIF/NIF"),
+                        "plan": st.column_config.TextColumn("Plan"),
+                        "role": st.column_config.TextColumn("Rol"),
+                        "status": st.column_config.TextColumn("Estado")
+                    },
+                    hide_index=True,
+                    use_container_width=True,
+                    selection_mode="single-row",
+                    on_select="rerun",
+                    key="tabla_usuarios_admin"
+                )
+                
+                selected_rows = event.selection.rows if hasattr(event, "selection") and event.selection else []
+                
+                if usuarios_filtrados:
+                    if selected_rows:
+                        selected_index = selected_rows[0]
+                        usuario_sel = usuarios_filtrados[selected_index]
+                    else:
+                        usuario_sel = usuarios_filtrados[0]
+                    
+                    if usuario_sel:
+                        user_id_sel = usuario_sel["id"]
+                        st.markdown("---")
+                        st.subheader(f"Gestionar: {usuario_sel['email'] or usuario_sel['company_name']}")
+                        
+                        col_a1, col_a2, col_a3 = st.columns(3)
+                        with col_a1:
+                            nuevo_rol = st.selectbox("Rol", ["cliente", "admin"], index=0 if usuario_sel["role"] != "admin" else 1, key=f"rol_{user_id_sel}")
+                            if st.button("🔄 Cambiar rol", key=f"btn_rol_{user_id_sel}"):
+                                admin_client.table("user_roles").upsert({"user_id": user_id_sel, "role": nuevo_rol}, on_conflict="user_id").execute()
+                                registrar_accion_admin("cambiar_rol", user_id_sel, nuevo_rol)
+                                st.success("Rol actualizado")
+                                st.rerun()
+                        with col_a2:
+                            dias_prueba = st.number_input("Días prueba", 0, 30, 7, key=f"dias_{user_id_sel}")
+                            if st.button("🎁 Conceder prueba", key=f"btn_prueba_{user_id_sel}"):
+                                fecha_fin = date.today() + timedelta(days=int(dias_prueba))
+                                admin_client.table("subscriptions").upsert({"user_id": user_id_sel, "plan": "profesional", "status": "trialing", "trial_end": str(fecha_fin)}, on_conflict="user_id").execute()
+                                registrar_accion_admin("conceder_prueba", user_id_sel, f"{dias_prueba} días")
+                                st.success(f"Prueba hasta {fecha_fin}")
+                                st.rerun()
+                        with col_a3:
+                            if usuario_sel["status"] == "inactive":
+                                if st.button("✅ Habilitar", key=f"btn_hab_{user_id_sel}"):
+                                    admin_client.table("subscriptions").update({"status": "active"}).eq("user_id", user_id_sel).execute()
+                                    registrar_accion_admin("habilitar", user_id_sel)
+                                    st.success("Habilitado")
+                                    st.rerun()
+                            else:
+                                if st.button("🚫 Deshabilitar", key=f"btn_des_{user_id_sel}"):
+                                    admin_client.table("subscriptions").update({"status": "inactive"}).eq("user_id", user_id_sel).execute()
+                                    registrar_accion_admin("deshabilitar", user_id_sel)
+                                    st.success("Deshabilitado")
+                                    st.rerun()
+        except Exception as e:
+            st.error(f"Error al cargar usuarios: {e}")
+    
+    # TAB SUSCRIPCIONES
+    with tab_suscripciones:
+        st.subheader("💳 Control de Suscripciones")
+        try:
+            subs_res = admin_client.table("subscriptions").select("*").execute()
+            if subs_res.data:
+                subs_df = pd.DataFrame(subs_res.data)
+                
+                mapping_dict = {}
+                try:
+                    users_view_res = admin_client.table("users_view").select("id, email").execute()
+                    if users_view_res.data:
+                        for u in users_view_res.data:
+                            mapping_dict[u["id"]] = {"email": u.get("email", ""), "nombre": ""}
+                except Exception:
+                    pass
+                
+                try:
+                    settings_res = admin_client.table("settings").select("user_id, company_email, company_name").execute()
+                    if settings_res.data:
+                        for s in settings_res.data:
+                            uid = s["user_id"]
+                            if uid not in mapping_dict:
+                                mapping_dict[uid] = {"email": "", "nombre": ""}
+                            if not mapping_dict[uid].get("email"):
+                                mapping_dict[uid]["email"] = s.get("company_email", "")
+                            mapping_dict[uid]["nombre"] = s.get("company_name", "")
+                except Exception:
+                    pass
+                
+                def get_email(uid):
+                    info = mapping_dict.get(uid, {})
+                    email = info.get("email", "")
+                    return email if email else "Sin email"
+                
+                def get_nombre(uid):
+                    info = mapping_dict.get(uid, {})
+                    nombre = info.get("nombre", "")
+                    return nombre if nombre else "Sin nombre"
+                
+                subs_df["email"] = subs_df["user_id"].apply(get_email)
+                subs_df["nombre"] = subs_df["user_id"].apply(get_nombre)
+                
+                total_activas = len(subs_df[subs_df["status"] == "active"])
+                total_trialing = len(subs_df[subs_df["status"] == "trialing"])
+                total_past_due = len(subs_df[subs_df["status"] == "past_due"])
+                
+                col_s1, col_s2, col_s3 = st.columns(3)
+                col_s1.metric("✅ Activas", total_activas)
+                col_s2.metric("🎁 Prueba", total_trialing)
+                col_s3.metric("⚠️ Atrasadas", total_past_due)
+                
+                if total_past_due > 0:
+                    st.error(f"🚨 {total_past_due} usuarios con pagos atrasados")
+                
+                st.markdown("---")
+                subs_display = subs_df[["email", "nombre", "plan", "status"]].copy()
+                subs_display.columns = ["Email", "Nombre", "Plan", "Estado"]
+                subs_display = subs_display.sort_values("Email")
+                st.dataframe(subs_display, hide_index=True, use_container_width=True)
+                
+                sin_email = len(subs_df[subs_df["email"] == "Sin email"])
+                if sin_email > 0:
+                    st.info(f"ℹ️ {sin_email} suscripciones sin email asociado.")
+        except Exception as e:
+            st.error(f"Error al cargar suscripciones: {e}")
+    
+    # TAB LOGS (CON FORMATO DE FECHA Y NOMBRES LIMPIOS)
+    with tab_logs:
+        st.subheader("⚠️ Monitor de Logs")
+        col_l1, col_l2 = st.columns(2)
+        with col_l1:
+            st.markdown("### Errores FacturaE")
+            try:
+                logs_res = admin_client.table("error_logs").select("*").order("created_at", desc=True).limit(50).execute()
+                if logs_res.data:
+                    logs_df = pd.DataFrame(logs_res.data)
+                    logs_df["created_at"] = pd.to_datetime(logs_df["created_at"])
+                    st.dataframe(
+                        logs_df[["created_at", "user_id", "invoice_number", "error_message"]],
+                        column_config={
+                            "created_at": st.column_config.DatetimeColumn("Fecha y Hora", format="DD/MM/YYYY - HH:mm"),
+                            "user_id": st.column_config.TextColumn("ID Usuario"),
+                            "invoice_number": st.column_config.TextColumn("Nº Factura"),
+                            "error_message": st.column_config.TextColumn("Mensaje de Error")
+                        },
+                        hide_index=True,
+                        use_container_width=True
+                    )
+                else:
+                    st.info("Sin errores registrados.")
+            except Exception as e:
+                st.error(f"Error al cargar error_logs: {e}")
+        with col_l2:
+            st.markdown("### Auditoría Admin")
+            try:
+                audit_res = admin_client.table("admin_actions").select("*").order("created_at", desc=True).limit(50).execute()
+                if audit_res.data:
+                    audit_df = pd.DataFrame(audit_res.data)
+                    audit_df["created_at"] = pd.to_datetime(audit_df["created_at"])
+                    st.dataframe(
+                        audit_df[["created_at", "admin_id", "user_id", "action_type", "action_details"]],
+                        column_config={
+                            "created_at": st.column_config.DatetimeColumn("Fecha y Hora", format="DD/MM/YYYY - HH:mm"),
+                            "admin_id": st.column_config.TextColumn("ID Admin"),
+                            "user_id": st.column_config.TextColumn("ID Usuario Afectado"),
+                            "action_type": st.column_config.TextColumn("Acción"),
+                            "action_details": st.column_config.TextColumn("Detalles")
+                        },
+                        hide_index=True,
+                        use_container_width=True
+                    )
+                else:
+                    st.info("Sin acciones registradas.")
+            except Exception as e:
+                st.error(f"Error al cargar admin_actions: {e}")
+
+
+# ════════════════════════════════════════════════════════════
+# SUSCRIPCIÓN (COMPLETA)
+# ════════════════════════════════════════════════════════════
+elif menu == "💳 Suscripción":
+    st.title("💳 Planes de Suscripción")
+    
+    if not user_id:
+        st.error("No se pudo obtener tu ID de usuario. Inicia sesión de nuevo.")
+        st.stop()
+    
+    try:
+        suscripcion = obtener_suscripcion_usuario(user_id)
+        plan_actual = suscripcion.get("plan", "free") if suscripcion else "free"
+    except Exception:
+        plan_actual = "free"
+    
+    iconos_plan = {"free": "🆓 Gratis", "basico": "💼 Básico", "profesional": "⭐ Profesional", "gestoria": "🏢 Gestoría"}
+    st.markdown(f"### Tu plan actual: **{iconos_plan.get(plan_actual, plan_actual)}**")
+    
+    try:
+        pagos = obtener_historial_pagos(user_id)
+        if pagos:
+            st.markdown("---")
+            st.subheader("📜 Historial de pagos")
+            pagos_df = pd.DataFrame(pagos)
+            if not pagos_df.empty:
+                pagos_df["Fecha"] = pd.to_datetime(pagos_df["created_at"]).dt.strftime("%d/%m/%Y")
+                pagos_df["Importe"] = pagos_df["amount"].apply(lambda x: f"{float(x):,.2f} €")
+                pagos_df["Plan"] = pagos_df["plan"]
+                pagos_df["Estado"] = pagos_df["status"]
+                st.dataframe(pagos_df[["Fecha", "Importe", "Plan", "Estado"]], hide_index=True, use_container_width=True)
+    except Exception:
+        pass
+    
+    st.markdown("---")
+    st.markdown("### Planes disponibles")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.markdown("### 🆓 Gratis")
+        st.markdown("**0 €/mes**")
+        st.markdown("---")
+        st.markdown("✔️ 3 facturas/mes")
+        st.markdown("✔️ PDF básico sin QR")
+        st.markdown("✔️ Clientes y productos")
+        st.markdown("❌ Sin firma electrónica")
+        st.markdown("❌ Sin Veri*Factu")
+        st.markdown("❌ Sin XML FacturaE")
+        st.markdown("---")
+        if plan_actual == "free":
+            st.success("✅ Plan actual")
+        else:
+            if st.button("⬇️ Cambiar a Gratis", key="btn_free", use_container_width=True):
+                if cancelar_suscripcion(user_id):
+                    st.success("Suscripción cancelada. Plan cambiado a Gratis.")
+                    time.sleep(1)
+                    st.rerun()
+    
+    with col2:
+        st.markdown("### 💼 Básico")
+        st.markdown("**15 €/mes**")
+        st.markdown("---")
+        st.markdown("✔️ Facturas ilimitadas")
+        st.markdown("✔️ PDF con QR Veri*Factu")
+        st.markdown("✔️ Envío por email")
+        st.markdown("✔️ Clientes y productos")
+        st.markdown("✔️ Presupuestos")
+        st.markdown("❌ Sin firma XAdES-T")
+        st.markdown("❌ Sin XML FacturaE")
+        st.markdown("---")
+        if plan_actual == "basico":
+            st.success("✅ Plan actual")
+        else:
+            if st.button("🚀 Contratar Básico", key="btn_basico", use_container_width=True):
+                url = crear_checkout_session(user_id, st.session_state.user.email, "basico")
+                if url:
+                    st.markdown(f"[🔗 Ir a la página de pago]({url})")
+                    st.info("Serás redirigido a Stripe para completar el pago.")
+    
+    with col3:
+        st.markdown("### ⭐ Profesional")
+        st.markdown("**30 €/mes**")
+        st.markdown("---")
+        st.markdown("✔️ Todo lo del plan Básico")
+        st.markdown("✔️ **Veri*Factu completo**")
+        st.markdown("✔️ **FacturaE XML firmado XAdES-T**")
+        st.markdown("✔️ Hash encadenado SHA-256")
+        st.markdown("✔️ QR verificable AEAT")
+        st.markdown("✔️ Contabilidad")
+        st.markdown("✔️ Modelo 303")
+        st.markdown("---")
+        if plan_actual == "profesional":
+            st.success("✅ Plan actual")
+        else:
+            if st.button("🌟 Contratar Profesional", key="btn_profesional", use_container_width=True):
+                url = crear_checkout_session(user_id, st.session_state.user.email, "profesional")
+                if url:
+                    st.markdown(f"[🔗 Ir a la página de pago]({url})")
+                    st.info("Serás redirigido a Stripe para completar el pago.")
+    
+    with col4:
+        st.markdown("### 🏢 Gestoría")
+        st.markdown("**60 €/mes**")
+        st.markdown("---")
+        st.markdown("✔️ Todo lo del plan Profesional")
+        st.markdown("✔️ **Multi-usuario**")
+        st.markdown("✔️ **API REST**")
+        st.markdown("✔️ Soporte prioritario")
+        st.markdown("✔️ Informes avanzados")
+        st.markdown("✔️ Exportación a Excel")
+        st.markdown("✔️ Personalización completa")
+        st.markdown("---")
+        if plan_actual == "gestoria":
+            st.success("✅ Plan actual")
+        else:
+            if st.button("🏢 Contratar Gestoría", key="btn_gestoria", use_container_width=True):
+                url = crear_checkout_session(user_id, st.session_state.user.email, "gestoria")
+                if url:
+                    st.markdown(f"[🔗 Ir a la página de pago]({url})")
+                    st.info("Serás redirigido a Stripe para completar el pago.")
+    
+    st.markdown("---")
+    st.caption("Los pagos se procesan de forma segura a través de Stripe. Puedes cancelar en cualquier momento.")
+
+# ════════════════════════════════════════════════════════════
+# CONFIGURACIÓN (CORREGIDA - Bucket 'logos')
+# ════════════════════════════════════════════════════════════
+elif menu == "⚙️ Configuración":
+    st.title("Configuración de empresa y plantillas")
+
+    # Cargar configuración existente de la BD
+    try:
+        config_res = (
+            supabase.table("settings")
+            .select("*")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        if config_res.data and len(config_res.data) > 0:
+            settings = config_res.data[0]
+        else:
+            settings = {}
+    except Exception:
+        settings = {}
+
+    company_name = settings.get("company_name", "")
+    tax_id = settings.get("company_tax_id", "")
+    address = settings.get("company_address", "")
+    iban = settings.get("company_iban", "")
+    company_logo = settings.get("company_logo", "")
+    company_phone = settings.get("company_phone", "")
+    company_email = settings.get("company_email", "")
+    nombre_plantilla = settings.get("nombre_plantilla", "default")
+    template_html = settings.get("codigo_html", "")
+    template_css = settings.get("codigo_css", "")
+    budget_html = settings.get("budget_html", "")
+    budget_css = settings.get("budget_css", "")
+
+    # ----------------------------------------------------
+    # SECCIÓN: LOGO DE LA EMPRESA (CON BUCKET 'logos')
+    # ----------------------------------------------------
+    st.markdown("---")
+    st.subheader("🖼️ Logo de la empresa")
+
+    col_logo_up, col_logo_prev = st.columns([2, 1])
+
+    with col_logo_up:
+        archivo_logo = st.file_uploader(
+            "Seleccionar imagen para el logo (PNG, JPG, JPEG)",
+            type=["png", "jpg", "jpeg"],
+            key="input_logo_empresa",
+        )
+
+        # VISTA PREVIA INMEDIATA AL SELECCIONAR ARCHIVO
+        if archivo_logo is not None:
+            st.image(archivo_logo, width=200, caption="Vista previa del nuevo logo")
+            
+            if st.button("🚀 Guardar Logo", key="btn_subir_logo_action", use_container_width=True):
+                with st.spinner("Subiendo logo a Supabase..."):
+                    try:
+                        ext = archivo_logo.name.split(".")[-1].lower()
+                        file_path = f"logo_{user_id}.{ext}"
+                        file_bytes = archivo_logo.getvalue()
+                        content_type = archivo_logo.type or f"image/{ext}"
+
+                        # 1. Intentar subir al bucket 'logos' (fallback a update si ya existe)
+                        try:
+                            supabase.storage.from_("logos").upload(
+                                path=file_path,
+                                file=file_bytes,
+                                file_options={
+                                    "content-type": content_type,
+                                    "upsert": "true",
+                                },
+                            )
+                        except Exception:
+                            supabase.storage.from_("logos").update(
+                                path=file_path,
+                                file=file_bytes,
+                                file_options={"content-type": content_type},
+                            )
+
+                        # 2. Obtención de URL pública limpia
+                        url_raw = supabase.storage.from_("logos").get_public_url(file_path)
+                        if isinstance(url_raw, dict):
+                            url_base = url_raw.get("publicUrl", url_raw.get("publicURL", ""))
+                        else:
+                            url_base = str(url_raw)
+
+                        # 3. Timestamp para romper la caché del navegador
+                        import time as py_time
+                        url_publica = f"{url_base}?v={int(py_time.time())}"
+
+                        # 4. Guardar URL en la tabla settings
+                        supabase.table("settings").upsert(
+                            {"user_id": user_id, "company_logo": url_publica},
+                            on_conflict="user_id",
+                        ).execute()
+
+                        st.success("✅ ¡Logo guardado y actualizado con éxito!")
+                        py_time.sleep(1)
+                        st.rerun()
+
+                    except Exception as err:
+                        st.error(f"❌ Error al subir el logo: {err}")
+                        st.info(
+                            "💡 Comprueba que en tu panel de Supabase exista un Bucket de Storage llamado 'logos' marcado como 'Public'."
+                        )
+
+    with col_logo_prev:
+        if archivo_logo is not None:
+            st.success("✅ Nuevo logo seleccionado")
+            st.caption("Pulsa '🚀 Guardar Logo' para guardarlo")
+        elif company_logo:
+            st.markdown("**Logo actual guardado:**")
+            st.image(company_logo, width=180)
+        else:
+            st.info("Sin logo configurado")
+
+    # ----------------------------------------------------
+    # FORMULARIO DE DATOS FISCALES Y PLANTILLAS
+    # ----------------------------------------------------
+    st.markdown("---")
+    with st.form("config_form"):
+        st.subheader("📋 Datos Fiscales")
+        company_name = st.text_input(
+            "Nombre de la empresa / autónomo", value=company_name
+        )
+        tax_id = st.text_input("NIF/CIF", value=tax_id)
+        address = st.text_area("Dirección fiscal", value=address)
+        iban = st.text_input("IBAN", value=iban)
+        company_phone = st.text_input("Teléfono", value=company_phone)
+        company_email = st.text_input("Correo electrónico", value=company_email)
+        company_logo_input = st.text_input(
+            "URL manual del logo (opcional)", value=company_logo
+        )
+
+        st.markdown("---")
+        st.subheader("📄 Plantilla de factura")
+        nombre_plantilla = st.text_input(
+            "Nombre de la plantilla", value=nombre_plantilla
+        )
+        template_html = st.text_area(
+            "Código HTML (codigo_html)", value=template_html, height=250
+        )
+        template_css = st.text_area(
+            "Código CSS (codigo_css) - opcional", value=template_css, height=100
+        )
+
+        st.markdown("---")
+        st.subheader("📄 Plantilla de presupuesto")
+        budget_html = st.text_area(
+            "Código HTML (budget_html)", value=budget_html, height=250
+        )
+        budget_css = st.text_area(
+            "Código CSS (budget_css) - opcional", value=budget_css, height=100
+        )
+
+        if st.form_submit_button("💾 Guardar datos fiscales"):
+            tax_val = (tax_id or "").strip()
+            if tax_val and not validar_nif_cif(tax_val):
+                st.error("El NIF/CIF no es válido.")
+            else:
+                iban_val = (iban or "").strip()
+                if iban_val and not validar_iban(iban_val):
+                    st.error("El IBAN no es válido.")
+                else:
+                    data = {
+                        "user_id": user_id,
+                        "company_name": company_name.strip(),
+                        "company_tax_id": tax_val,
+                        "company_address": address.strip(),
+                        "company_iban": iban_val,
+                        "company_phone": company_phone.strip(),
+                        "company_email": company_email.strip(),
+                        "company_logo": company_logo_input.strip(),
+                        "nombre_plantilla": nombre_plantilla.strip(),
+                        "codigo_html": template_html,
+                        "codigo_css": template_css,
+                        "budget_html": budget_html,
+                        "budget_css": budget_css,
+                    }
+                    try:
+                        supabase.table("settings").upsert(
+                            data, on_conflict="user_id"
+                        ).execute()
+                        st.success("Datos fiscales guardados correctamente")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error al guardar: {e}")
+
+    # ----------------------------------------------------
+    # CERTIFICADO DIGITAL
+    # ----------------------------------------------------
+    st.markdown("---")
+    st.subheader("🔐 Certificado Digital para Firma Electrónica")
+
+    tiene_cert = tiene_certificado(user_id)
+
+    if tiene_cert:
+        st.success("✅ Tienes un certificado configurado")
+        if st.button("🗑️ Eliminar certificado actual"):
+            confirmado = st.checkbox("Confirmo que deseo eliminar mi certificado")
+            if confirmado:
+                if eliminar_certificado_usuario(user_id):
+                    st.success("Certificado eliminado correctamente")
+                    st.rerun()
+
+    st.markdown("**Subir certificado (.p12 o .pfx)**")
+    archivo_cert = st.file_uploader(
+        "Archivo del certificado", type=["p12", "pfx"], key="cert_uploader"
+    )
+    password_cert = st.text_input("Contraseña del certificado", type="password")
+
+    if st.button("💾 Guardar certificado"):
+        if archivo_cert is None:
+            st.error("Debes subir un archivo de certificado.")
+        elif not password_cert:
+            st.error("Debes introducir la contraseña del certificado.")
+        else:
+            try:
+                certificado_bytes = archivo_cert.getvalue()
+                from firma_xades import cargar_certificado_p12
+
+                try:
+                    cargar_certificado_p12(certificado_bytes, password_cert)
+                except Exception as e:
+                    st.error(f"El certificado no es válido: {str(e)}")
+                    st.stop()
+                if guardar_certificado_usuario(
+                    user_id, certificado_bytes, password_cert
+                ):
+                    st.success("Certificado guardado correctamente")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Error al guardar certificado: {str(e)}")
+
+    st.markdown("---")
+    if st.button("Probar plantilla factura"):
+        ejemplo_invoice = {
+            "invoice_number": "F2024-001",
+            "date": "2024-01-15",
+            "month": "Enero",
+            "concept": "Desarrollo web",
+            "base_amount": 1000.0,
+            "vat_percentage": 21,
+            "vat_amount": 210.0,
+            "irpf_percentage": 0,
+            "irpf_amount": 0.0,
+            "total": 1210.0,
+        }
+        ejemplo_client = {
+            "name": "Cliente Ejemplo",
+            "tax_id": "B12345678",
+            "address": "Calle Falsa 123",
+        }
+        ejemplo_lineas = [
+            {
+                "description": "Desarrollo web",
+                "quantity": 1,
+                "unit_price": 1000.0,
+                "base_amount": 1000.0,
+                "vat_amount": 210.0,
+                "irpf_amount": 0.0,
+                "total": 1210.0,
+            }
+        ]
+        ejemplo_company = {
+            "company_name": company_name,
+            "company_tax_id": tax_id,
+            "company_address": address,
+            "company_iban": iban,
+            "company_logo": company_logo,
+            "company_phone": company_phone,
+            "company_email": company_email,
+            "codigo_html": template_html,
+            "codigo_css": template_css,
+        }
+        pdf_bytes = make_invoice_pdf_from_template(
+            ejemplo_invoice, ejemplo_client, ejemplo_company, ejemplo_lineas
+        )
+        if pdf_bytes:
+            st.download_button(
+                "Descargar factura de prueba",
+                pdf_bytes,
+                "prueba_factura.pdf",
+                "application/pdf",
+            )
 # ════════════════════════════════════════════════════════════
 # COMPRAS (CORREGIDO - IVA 0% para Seguridad Social)
 # ════════════════════════════════════════════════════════════
