@@ -14,4 +14,4 @@ pycryptodome
 stripe
 openpyxl
 reportlab
-kreyo-verifactu-hash-calculator
+
