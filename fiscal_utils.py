@@ -227,3 +227,35 @@ def calculate_fiscal_summary(
             "ganancia_neta":      ganancia_neta_dec,
         },
     }
+
+
+# ────────────────────────────────────────────────────────────
+# HELPER PARA GRÁFICAS
+# ────────────────────────────────────────────────────────────
+def get_filtered_dataframes(
+    invoices_df: pd.DataFrame,
+    expenses_df: pd.DataFrame,
+    year: Optional[int] = None,
+    month: Optional[Union[int, str]] = None,
+    quarter: Optional[int] = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Devuelve (invoices_filtered, expenses_filtered) aplicando
+    exactamente el mismo filtro que `calculate_fiscal_summary`.
+
+    Útil para gráficas que necesitan los DataFrames crudos (no agregados).
+    Garantiza que gráficas y KPIs usen siempre el mismo subset de datos.
+
+    Args:
+        invoices_df: DataFrame crudo de `get_invoices()`.
+        expenses_df: DataFrame crudo de `get_expenses()`.
+        year: Año a filtrar (int).
+        month: Mes a filtrar (int 1-12 o string "Enero"). None = todos.
+        quarter: Trimestre (1-4). Tiene prioridad sobre `month`.
+
+    Returns:
+        Tupla (inv_f, exp_f) con DataFrames filtrados.
+    """
+    inv_f = filter_by_period(invoices_df, year=year, month=month, quarter=quarter)
+    exp_f = filter_by_period(expenses_df, year=year, month=month, quarter=quarter)
+    return inv_f, exp_f
