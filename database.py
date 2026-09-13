@@ -46,7 +46,7 @@ def money(x):
 # Funciones para hash encadenado Veri*Factu
 # ------------------------------------------------------------
 def obtener_ultimo_hash(user_id: str) -> str:
-    """Recupera el hash de la última factura emitida del usuario (por fecha/hora de generación)."""
+    """Recupera el hash de la última factura emitida del usuario."""
     supabase = _get_supabase()
     res = (
         supabase.table("invoices_v2")
@@ -74,15 +74,9 @@ def generar_hash_factura(
     """
     Genera la huella SHA-256 según la especificación oficial Verifactu
     (Orden HAC/1177/2024) y devuelve (hash, timestamp_iso).
-
-    - fecha_expedicion: puede venir en ISO (YYYY-MM-DD) o DD-MM-AAAA
-    - tipo_factura: "F1" (normal), "F2" (simplificada), "R1" (rectificativa)
-    - cuota_total: importe del IVA (vat_amount)
-    - hash_anterior: hash de la factura previa ("" si es la primera)
     """
     from verifactu_utils import generar_hash_verifactu, formatear_fecha_verifactu
 
-    # Timestamp en ISO-8601 con huso horario (segundos, sin microsegundos)
     timestamp_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
     # Normalizar fecha a DD-MM-AAAA
@@ -92,7 +86,7 @@ def generar_hash_factura(
     else:
         fecha_verifactu = fecha_str
 
-    # Normalizar tipo de factura (mapeo interno → oficial AEAT)
+    # Normalizar tipo de factura
     tipo_map = {
         "normal": "F1",
         "rectificativa": "R1",
@@ -141,9 +135,7 @@ def auditar_factura(invoice_id: str, accion: str, hash_factura: str, user_id: st
 # Funciones de asientos contables
 # ------------------------------------------------------------
 def generar_asiento_factura(invoice_id, user_id, fecha, base, iva, irpf, total, cliente_nombre):
-    """
-    Genera el asiento contable de una factura de venta.
-    """
+    """Genera el asiento contable de una factura de venta."""
     supabase = _get_supabase()
     check = supabase.table("invoices_v2").select("id").eq("id", invoice_id).execute()
     if not check.data:
@@ -160,7 +152,6 @@ def generar_asiento_factura(invoice_id, user_id, fecha, base, iva, irpf, total, 
         raise Exception("No se pudo crear la entrada del diario contable.")
     entry_id = res.data[0]["id"]
 
-    # El total a cobrar = total + irpf (el IRPF se retiene pero se cobra al cliente)
     total_cobrar = total + irpf if irpf > 0 else total
 
     lineas = [
@@ -186,9 +177,7 @@ def generar_asiento_factura(invoice_id, user_id, fecha, base, iva, irpf, total, 
 
 
 def generar_asiento_gasto(expense_id, user_id, fecha, base, iva, irpf, total, proveedor_nombre):
-    """
-    Genera el asiento contable de un gasto.
-    """
+    """Genera el asiento contable de un gasto."""
     supabase = _get_supabase()
     check = supabase.table("expenses_v2").select("id").eq("id", expense_id).execute()
     if not check.data:
@@ -205,7 +194,6 @@ def generar_asiento_gasto(expense_id, user_id, fecha, base, iva, irpf, total, pr
         raise Exception("No se pudo crear la entrada del diario contable.")
     entry_id = res.data[0]["id"]
 
-    # El total a pagar = total + irpf
     total_pagar = total + irpf if irpf > 0 else total
 
     lineas = [
@@ -234,15 +222,9 @@ def generar_asiento_gasto(expense_id, user_id, fecha, base, iva, irpf, total, pr
 # Creación segura de factura con rollback real
 # ------------------------------------------------------------
 def crear_factura_con_rollback(invoice_data, lineas_data, user_id, cliente_nombre):
-    """
-    Crea una factura con rollback real si algo falla.
-
-    Retorna:
-    - (exito, invoice_id, mensaje)
-    """
+    """Crea una factura con rollback real si algo falla."""
     supabase = _get_supabase()
 
-    # 1. Validar NIF del emisor antes de nada
     config_res = supabase.table("settings").select("company_tax_id").eq("user_id", user_id).execute()
     nif_emisor = config_res.data[0].get("company_tax_id") if config_res.data else None
 
@@ -252,7 +234,6 @@ def crear_factura_con_rollback(invoice_data, lineas_data, user_id, cliente_nombr
     if not lineas_data:
         return False, None, "❌ Error: La factura debe tener al menos una línea de detalle."
 
-    # 2. Verificar que no exista duplicado
     invoice_number = invoice_data.get("invoice_number", "")
     existing = (
         supabase.table("invoices_v2")
@@ -272,7 +253,7 @@ def crear_factura_con_rollback(invoice_data, lineas_data, user_id, cliente_nombr
         # 3. Obtener hash anterior (encadenamiento)
         hash_anterior = obtener_ultimo_hash(user_id)
 
-        # 4. Generar hash Verifactu (necesita cuota_total = IVA)
+        # 4. Generar hash Verifactu
         tipo_factura_interno = invoice_data.get("tipo", "normal")
         hash_nuevo, timestamp_hash = generar_hash_factura(
             nif_emisor=nif_emisor,
@@ -284,21 +265,21 @@ def crear_factura_con_rollback(invoice_data, lineas_data, user_id, cliente_nombr
             hash_anterior=hash_anterior,
         )
 
-        # Normalizar tipo para BD (F1 normal, R1 rectificativa)
         tipo_bd = "R1" if "rectificativa" in str(tipo_factura_interno).lower() else "F1"
 
         invoice_data["hash"] = hash_nuevo
         invoice_data["hash_anterior"] = hash_anterior
         invoice_data["fecha_hora_gen_registro"] = timestamp_hash
         invoice_data["tipo_factura"] = tipo_bd
+        invoice_data["sistema_informatico_id"] = "HF"   # ← NUEVO
 
-        # 5. Insertar cabecera de la factura
+        # 5. Insertar cabecera
         res = supabase.table("invoices_v2").insert(invoice_data).execute()
         if not res.data:
             return False, None, "❌ No se pudo crear la factura (error en cabecera)."
         invoice_id = res.data[0]["id"]
 
-        # 6. Insertar líneas de factura
+        # 6. Insertar líneas
         for linea in lineas_data:
             linea["invoice_id"] = invoice_id
             linea["user_id"] = user_id
@@ -319,7 +300,6 @@ def crear_factura_con_rollback(invoice_data, lineas_data, user_id, cliente_nombr
         return True, invoice_id, "Factura y asiento contable generados correctamente."
 
     except Exception as e:
-        # ROLLBACK: Eliminar en orden inverso
         st.warning(f"Se produjo un error, revirtiendo cambios...: {str(e)}")
 
         if entry_id:
@@ -345,24 +325,17 @@ def crear_factura_con_rollback(invoice_data, lineas_data, user_id, cliente_nombr
 
 
 def crear_gasto_con_rollback(expense_data, user_id, proveedor_nombre):
-    """
-    Crea un gasto con rollback real si algo falla.
-
-    Retorna:
-    - (exito, expense_id, mensaje)
-    """
+    """Crea un gasto con rollback real si algo falla."""
     supabase = _get_supabase()
     expense_id = None
     entry_id = None
 
     try:
-        # 1. Insertar gasto
         res = supabase.table("expenses_v2").insert(expense_data).execute()
         if not res.data:
             return False, None, "❌ No se pudo registrar el gasto."
         expense_id = res.data[0]["id"]
 
-        # 2. Generar asiento contable
         entry_id = generar_asiento_gasto(
             expense_id, user_id,
             expense_data["date"], expense_data["base_amount"],
