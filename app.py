@@ -2850,32 +2850,6 @@ elif menu == "📊 Dashboards":
         st.info("No hay datos contables registrados para generar analíticas.")
     else:
         # ────────────────────────────────────────────────────
-        # Normalización de datos de ingresos
-        # ────────────────────────────────────────────────────
-        if not invoices.empty:
-            invoices["date_dt"] = pd.to_datetime(invoices["date"], errors="coerce")
-            invoices["year"] = invoices["date_dt"].dt.year
-            invoices["month_num"] = invoices["date_dt"].dt.month
-            invoices["month_name"] = invoices["month_num"].apply(
-                lambda x: LISTA_MESES[x - 1] if pd.notnull(x) and 1 <= int(x) <= 12 else "Desconocido"
-            )
-            if "base_amount" not in invoices.columns and "total" in invoices.columns:
-                invoices["base_amount"] = invoices["total"] - invoices.get("vat_amount", 0.0)
-
-        # ────────────────────────────────────────────────────
-        # Normalización de datos de gastos
-        # ────────────────────────────────────────────────────
-        if not expenses.empty:
-            expenses["date_dt"] = pd.to_datetime(expenses["date"], errors="coerce")
-            expenses["year"] = expenses["date_dt"].dt.year
-            expenses["month_num"] = expenses["date_dt"].dt.month
-            expenses["month_name"] = expenses["month_num"].apply(
-                lambda x: LISTA_MESES[x - 1] if pd.notnull(x) and 1 <= int(x) <= 12 else "Desconocido"
-            )
-            if "base_amount" not in expenses.columns and "total" in expenses.columns:
-                expenses["base_amount"] = expenses["total"] - expenses.get("vat_amount", 0.0)
-
-        # ────────────────────────────────────────────────────
         # 🔍 Filtros interactivos
         # ────────────────────────────────────────────────────
         st.subheader("🔍 Filtros de Visualización")
@@ -2883,13 +2857,17 @@ elif menu == "📊 Dashboards":
 
         with col_f1:
             anios_disponibles = set()
-            if not invoices.empty:
-                anios_disponibles.update(invoices["year"].dropna().astype(int).unique())
-            if not expenses.empty:
-                anios_disponibles.update(expenses["year"].dropna().astype(int).unique())
+            if not invoices.empty and "date" in invoices.columns:
+                _y = pd.to_datetime(invoices["date"], errors="coerce").dt.year.dropna()
+                anios_disponibles.update(_y.astype(int).unique())
+            if not expenses.empty and "date" in expenses.columns:
+                _y = pd.to_datetime(expenses["date"], errors="coerce").dt.year.dropna()
+                anios_disponibles.update(_y.astype(int).unique())
+
             anios_disponibles = sorted(list(anios_disponibles), reverse=True)
             if not anios_disponibles:
                 anios_disponibles = [datetime.now().year]
+
             year_seleccionado = st.selectbox(
                 "📅 Ejercicio Fiscal", anios_disponibles, index=0, key="dash_anio"
             )
@@ -2911,19 +2889,32 @@ elif menu == "📊 Dashboards":
             )
 
         # ────────────────────────────────────────────────────
-        # Filtrado por fecha (para las gráficas)
+        # Filtrado — MISMO filtro que los KPIs (fiscal_utils)
         # ────────────────────────────────────────────────────
-        data_inv = invoices[invoices["year"] == year_seleccionado].copy() if not invoices.empty else pd.DataFrame()
-        data_exp = expenses[expenses["year"] == year_seleccionado].copy() if not expenses.empty else pd.DataFrame()
+        data_inv, data_exp = get_filtered_dataframes(
+            invoices,
+            expenses,
+            year=year_seleccionado,
+            month=mes_seleccionado if mes_seleccionado != "Todos los meses" else None,
+        )
 
-        if mes_seleccionado != "Todos los meses":
-            if not data_inv.empty:
-                data_inv = data_inv[data_inv["month_name"] == mes_seleccionado]
-            if not data_exp.empty:
-                data_exp = data_exp[data_exp["month_name"] == mes_seleccionado]
+        # Recalcular columnas auxiliares que las gráficas necesitan
+        if not data_inv.empty:
+            data_inv["date_dt"] = pd.to_datetime(data_inv["date"], errors="coerce")
+            data_inv["month_num"] = data_inv["date_dt"].dt.month
+            data_inv["month_name"] = data_inv["month_num"].apply(
+                lambda x: LISTA_MESES[x - 1] if pd.notnull(x) and 1 <= int(x) <= 12 else "Desconocido"
+            )
+
+        if not data_exp.empty:
+            data_exp["date_dt"] = pd.to_datetime(data_exp["date"], errors="coerce")
+            data_exp["month_num"] = data_exp["date_dt"].dt.month
+            data_exp["month_name"] = data_exp["month_num"].apply(
+                lambda x: LISTA_MESES[x - 1] if pd.notnull(x) and 1 <= int(x) <= 12 else "Desconocido"
+            )
 
         if data_inv.empty and data_exp.empty:
-            st.warning(f"No hay movimientos registrados para el filtro seleccionado.")
+            st.warning("No hay movimientos registrados para el filtro seleccionado.")
         else:
             # ────────────────────────────────────────────────
             # 📊 Indicadores Clave (KPIs) — Motor fiscal unificado
@@ -2937,8 +2928,8 @@ elif menu == "📊 Dashboards":
 
             try:
                 s_kpi = calculate_fiscal_summary(
-                    get_invoices(user_id),
-                    get_expenses(user_id),
+                    invoices,
+                    expenses,
                     **kpi_kwargs
                 )
             except Exception as e:
@@ -2986,8 +2977,14 @@ elif menu == "📊 Dashboards":
                 gas_mensual = data_exp.groupby(["month_num", "month_name"])["total"].sum().reset_index() if not data_exp.empty else pd.DataFrame(columns=["month_num", "month_name", "total"])
 
                 meses_df = pd.DataFrame({"month_num": range(1, 13), "month_name": LISTA_MESES})
-                df_grafico = meses_df.merge(ing_mensual[["month_num", "total"]].rename(columns={"total": "ingresos"}), on="month_num", how="left")
-                df_grafico = df_grafico.merge(gas_mensual[["month_num", "total"]].rename(columns={"total": "gastos"}), on="month_num", how="left").fillna(0)
+                df_grafico = meses_df.merge(
+                    ing_mensual[["month_num", "total"]].rename(columns={"total": "ingresos"}),
+                    on="month_num", how="left"
+                )
+                df_grafico = df_grafico.merge(
+                    gas_mensual[["month_num", "total"]].rename(columns={"total": "gastos"}),
+                    on="month_num", how="left"
+                ).fillna(0)
                 x_labels = df_grafico["month_name"].tolist()
                 titulo = f"Evolución Mensual {year_seleccionado}"
             else:
@@ -3004,8 +3001,14 @@ elif menu == "📊 Dashboards":
                     gas_diario = pd.DataFrame(columns=["day", "total"])
 
                 dias_df = pd.DataFrame({"day": range(1, 32)})
-                df_grafico = dias_df.merge(ing_diario.rename(columns={"total": "ingresos"}), on="day", how="left")
-                df_grafico = df_grafico.merge(gas_diario.rename(columns={"total": "gastos"}), on="day", how="left").fillna(0)
+                df_grafico = dias_df.merge(
+                    ing_diario.rename(columns={"total": "ingresos"}),
+                    on="day", how="left"
+                )
+                df_grafico = df_grafico.merge(
+                    gas_diario.rename(columns={"total": "gastos"}),
+                    on="day", how="left"
+                ).fillna(0)
                 x_labels = [str(d) for d in df_grafico["day"]]
                 titulo = f"Evolución Diaria - {mes_seleccionado} {year_seleccionado}"
 
