@@ -28,7 +28,11 @@ from data_service import (
     get_invoices, get_clients, get_suppliers, get_products, get_expenses,
     get_bank_transactions, get_recurring_invoices, get_budgets, get_journal_entries
 )
-from fiscal_utils import calculate_fiscal_summary, filter_by_period      # ← NUEVO
+from fiscal_utils import (
+    calculate_fiscal_summary,
+    filter_by_period,
+    get_filtered_dataframes,
+)      # ← NUEVO
 from certificate_manager import (
     guardar_certificado_usuario, obtener_certificado_usuario,
     eliminar_certificado_usuario, tiene_certificado
