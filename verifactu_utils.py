@@ -1,19 +1,16 @@
-# verifactu_utils.py — REESCRITO SEGÚN ORDEN HAC/1177/2024
+# verifactu_utils.py — Implementación manual con hashlib (sin dependencias externas)
+import hashlib
 import urllib.parse
 from datetime import datetime
-from kreyo_verifactu_hash_calculator import (
-    compute_registro_alta,
-    RegistroAltaInput,
-)
 
 
 def generar_url_qr_verifactu(nif_emisor, num_serie_factura, fecha_expedicion, importe_total, produccion=True):
     """
-    URL oficial del QR Verifactu.
+    URL oficial del QR Verifactu según Orden HAC/1177/2024.
     
-    - num_serie_factura: concatenación "SERIE-NUMERO" (ej: "F2026-0001")
+    - num_serie_factura: número y serie concatenados (ej: "F2026-0001")
     - fecha_expedicion: formato "DD-MM-AAAA"
-    - importe_total: float (se formatea con punto decimal)
+    - importe_total: float (se formatea con 2 decimales)
     """
     if produccion:
         base = "https://www2.agenciatributaria.gob.es/wlpl/TIKE-CONT/ValidarQR"
@@ -24,7 +21,7 @@ def generar_url_qr_verifactu(nif_emisor, num_serie_factura, fecha_expedicion, im
     params = {
         "nif": nif_limpio,
         "numserie": num_serie_factura,
-        "fecha": fecha_expedicion,  # Ya debe venir en DD-MM-AAAA
+        "fecha": fecha_expedicion,
         "importe": f"{importe_total:.2f}",
     }
     return f"{base}?{urllib.parse.urlencode(params)}"
@@ -41,28 +38,47 @@ def generar_hash_verifactu(
     fecha_hora_gen_registro,
 ):
     """
-    Hash SHA-256 según especificación AEAT v0.1.2.
-    Usa librería de referencia que pasa los vectores oficiales.
+    Hash SHA-256 según especificación AEAT v0.1.2 (Orden HAC/1177/2024).
     
-    - num_serie_factura: "SERIE-NUMERO" concatenado
-    - fecha_expedicion: "DD-MM-AAAA"
-    - tipo_factura: "F1", "F2", "R1", etc.
-    - cuota_total: string con coma decimal (ej: "12,35")
-    - importe_total: string con coma decimal (ej: "123,45")
-    - hash_anterior: None si es la primera factura
-    - fecha_hora_gen_registro: ISO 8601 con timezone
+    Orden estricto de campos:
+    1. IDEmisorFactura
+    2. NumSerieFactura
+    3. FechaExpedicionFactura (DD-MM-AAAA)
+    4. TipoFactura (F1, F2, R1-R5, etc.)
+    5. CuotaTotal
+    6. ImporteTotal
+    7. Huella (hash anterior, vacío si es primero)
+    8. FechaHoraHusoGenRegistro (ISO-8601 con huso)
+    
+    Formato: nombreCampo1=valor1&nombreCampo2=valor2&...
     """
-    input_data = RegistroAltaInput(
-        id_emisor_factura=nif_emisor.strip().upper(),
-        num_serie_factura=num_serie_factura,
-        fecha_expedicion_factura=fecha_expedicion,
-        tipo_factura=tipo_factura,
-        cuota_total=str(cuota_total).replace(".", ","),
-        importe_total=str(importe_total).replace(".", ","),
-        huella_anterior=hash_anterior,
-        fecha_hora_huso_gen_registro=fecha_hora_gen_registro,
+    # Limpiar NIF
+    nif_limpio = nif_emisor.strip().upper().replace(" ", "").replace("-", "")
+
+    # Formatear importes con 2 decimales (punto decimal)
+    cuota_formateada = f"{float(cuota_total):.2f}"
+    importe_formateado = f"{float(importe_total):.2f}"
+
+    # Huella anterior vacía si es el primer registro
+    huella_anterior = hash_anterior if hash_anterior else ""
+
+    # Construir cadena pre-hash según orden oficial
+    cadena_pre_hash = (
+        f"IDEmisorFactura={nif_limpio}&"
+        f"NumSerieFactura={num_serie_factura}&"
+        f"FechaExpedicionFactura={fecha_expedicion}&"
+        f"TipoFactura={tipo_factura}&"
+        f"CuotaTotal={cuota_formateada}&"
+        f"ImporteTotal={importe_formateado}&"
+        f"Huella={huella_anterior}&"
+        f"FechaHoraHusoGenRegistro={fecha_hora_gen_registro}"
     )
-    return compute_registro_alta(input_data)
+
+    # Calcular SHA-256
+    hash_resultado = hashlib.sha256(cadena_pre_hash.encode('utf-8')).hexdigest()
+
+    # Retornar en mayúsculas (formato oficial AEAT)
+    return hash_resultado.upper()
 
 
 def formatear_fecha_verifactu(fecha_iso):
