@@ -15,7 +15,7 @@ from verifactu_utils import (
 )
 
 from reportlab.lib.pagesizes import A4
-from reportlab.lib.units import cm
+from reportlab.lib.units import cm, mm
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import (
@@ -107,7 +107,13 @@ def get_qr_base64(invoice, client, company_config):
         st.error(f"Error generando URL QR Verifactu: {e}")
         return ""
 
-    qr = qrcode.QRCode(box_size=4, border=1)
+    # Nivel de corrección M (Medio) según ISO/IEC 18004:2015 — obligatorio AEAT
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=10,
+        border=2,
+    )
     qr.add_data(qr_data)
     qr.make(fit=True)
     img = qr.make_image(image_factory=PilImage)
@@ -116,13 +122,20 @@ def get_qr_base64(invoice, client, company_config):
     return base64.b64encode(buffered.getvalue()).decode()
 
 
-def _get_qr_image(invoice, client, company_config, max_size=80):
+def _get_qr_image(invoice, client, company_config, max_size_mm=32):
+    """
+    Genera imagen QR para ReportLab.
+
+    AEAT exige tamaño entre 30x30 mm y 40x40 mm.
+    Usamos 32 mm por defecto (dentro del rango).
+    """
     qr_base64 = get_qr_base64(invoice, client, company_config)
     if not qr_base64:
         return None
     try:
         qr_bytes = base64.b64decode(qr_base64)
-        return RLImage(io.BytesIO(qr_bytes), width=max_size, height=max_size)
+        size_pt = max_size_mm * mm  # convertir mm a puntos
+        return RLImage(io.BytesIO(qr_bytes), width=size_pt, height=size_pt)
     except Exception:
         return None
 
@@ -233,6 +246,15 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
     footer_style = ParagraphStyle(
         'FooterStyle', parent=styles['Normal'], fontSize=8, leading=10,
         textColor=colors.HexColor('#718096'), alignment=TA_CENTER,
+    )
+    qr_legend_style = ParagraphStyle(
+        'QRLegendStyle', parent=styles['Normal'], fontSize=7, leading=9,
+        textColor=colors.HexColor('#1E3A8A'), alignment=TA_CENTER,
+        fontName='Helvetica-Bold',
+    )
+    qr_caption_style = ParagraphStyle(
+        'QRCaptionStyle', parent=styles['Normal'], fontSize=6.5, leading=8,
+        textColor=colors.HexColor('#4A5568'), alignment=TA_CENTER,
     )
 
     PAGE_WIDTH, PAGE_HEIGHT = A4
@@ -418,21 +440,41 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
 
     story.append(Paragraph(f"<b>Forma de pago:</b> Transferencia bancaria", meta_label_style))
     story.append(Paragraph(f"<b>IBAN:</b> {company_iban}", meta_label_style))
-    story.append(Spacer(1, 10))
+    story.append(Spacer(1, 12))
 
-    qr_img = _get_qr_image(invoice, client, company_config, max_size=70)
+    # ────────────────────────────────────────────────────────
+    # QR TRIBUTARIO VERIFACTU (según especificaciones AEAT)
+    # ────────────────────────────────────────────────────────
+    # - Tamaño entre 30x30 mm y 40x40 mm
+    # - Nivel corrección M
+    # - Leyenda "QR tributario" ENCIMA
+    # - Leyenda Veri*Factu DEBAJO (solo si Veri*Factu)
+    # - Solo en la primera página
+    # ────────────────────────────────────────────────────────
+    qr_img = _get_qr_image(invoice, client, company_config, max_size_mm=32)
+
     if qr_img:
-        qr_data = [
-            [qr_img, Paragraph("Factura generada electrónicamente<br/>Gracias por su confianza", footer_style)],
-        ]
-        qr_table = Table(qr_data, colWidths=[80, PRINTABLE_WIDTH - 80])
-        qr_table.setStyle(TableStyle([
+        qr_block = Table(
+            [
+                [Paragraph("QR tributario", qr_legend_style)],
+                [qr_img],
+                [Paragraph(
+                    "Factura verificable en la sede electrónica<br/>de la AEAT (Veri*Factu)",
+                    qr_caption_style
+                )],
+            ],
+            colWidths=[PRINTABLE_WIDTH],
+        )
+        qr_block.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('ALIGN', (1, 0), (1, -1), 'CENTER'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+            ('TOPPADDING', (0, 0), (-1, -1), 1),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
         ]))
-        story.append(qr_table)
-
-    story.append(Spacer(1, 6))
+        story.append(qr_block)
+        story.append(Spacer(1, 6))
 
     # ────────────────────────────────────────────────────────
     # SISTEMA INFORMÁTICO (SIF) — Verifactu
@@ -447,7 +489,7 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
     story.append(Spacer(1, 4))
 
     story.append(Paragraph(
-        "Sistema de facturación verificable / VERI*FACTU - Factura verificable en la sede electrónica de la AEAT",
+        "Sistema de facturación verificable / VERI*FACTU",
         footer_style
     ))
 
