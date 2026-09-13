@@ -8,7 +8,11 @@ import qrcode
 from qrcode.image.pil import PilImage
 import streamlit as st
 from database import init_supabase
-from verifactu_utils import generar_url_qr_verifactu, formatear_fecha_verifactu
+from verifactu_utils import (
+    generar_url_qr_verifactu,
+    formatear_fecha_verifactu,
+    get_sistema_informatico,
+)
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
@@ -22,7 +26,7 @@ from reportlab.lib.enums import TA_LEFT, TA_RIGHT, TA_CENTER
 
 
 # -----------------------------------------------------------
-# UTILIDADES DE IMAGEN Y TEXTO
+# UTILIDADES
 # -----------------------------------------------------------
 def _logo_sanitized(url):
     if not url:
@@ -429,6 +433,19 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         story.append(qr_table)
 
     story.append(Spacer(1, 6))
+
+    # ────────────────────────────────────────────────────────
+    # SISTEMA INFORMÁTICO (SIF) — Verifactu
+    # ────────────────────────────────────────────────────────
+    sif = get_sistema_informatico(company_tax_id)
+    story.append(Paragraph(
+        f"<b>Sistema Informático de Facturación:</b> {sif['NombreSistemaInformatico']} "
+        f"v{sif['Version']} · ID: {sif['IdSistemaInformatico']} · "
+        f"Instalación: {sif['NumeroInstalacion']}",
+        footer_style
+    ))
+    story.append(Spacer(1, 4))
+
     story.append(Paragraph(
         "Sistema de facturación verificable / VERI*FACTU - Factura verificable en la sede electrónica de la AEAT",
         footer_style
