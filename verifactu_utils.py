@@ -85,3 +85,51 @@ def formatear_fecha_verifactu(fecha_iso):
     """Convierte 'YYYY-MM-DD' a 'DD-MM-AAAA' para Verifactu."""
     d = datetime.strptime(fecha_iso, "%Y-%m-%d")
     return d.strftime("%d-%m-%Y")
+# ────────────────────────────────────────────────────────────
+# HASH OFICIAL VERIFACTU (Orden HAC/1177/2024)
+# ────────────────────────────────────────────────────────────
+import hashlib
+
+
+def generar_hash_verifactu(
+    nif_emisor,
+    num_serie_factura,
+    fecha_expedicion,
+    tipo_factura,
+    cuota_total,
+    importe_total,
+    hash_anterior,
+    fecha_hora_gen_registro,
+):
+    """
+    Hash SHA-256 según especificación AEAT v0.1.2 (Orden HAC/1177/2024).
+
+    Orden ESTRICTO de campos (no se puede alterar):
+    1. IDEmisorFactura
+    2. NumSerieFactura
+    3. FechaExpedicionFactura (DD-MM-AAAA)
+    4. TipoFactura (F1, F2, R1-R5)
+    5. CuotaTotal (IVA)
+    6. ImporteTotal
+    7. Huella (hash anterior, vacío si es el primero)
+    8. FechaHoraHusoGenRegistro (ISO-8601 con huso)
+
+    Formato: nombreCampo1=valor1&nombreCampo2=valor2&...
+    """
+    nif_limpio = (nif_emisor or "").strip().upper().replace(" ", "").replace("-", "")
+    cuota_fmt = f"{float(cuota_total):.2f}"
+    importe_fmt = f"{float(importe_total):.2f}"
+    huella = hash_anterior if hash_anterior else ""
+
+    cadena = (
+        f"IDEmisorFactura={nif_limpio}&"
+        f"NumSerieFactura={num_serie_factura}&"
+        f"FechaExpedicionFactura={fecha_expedicion}&"
+        f"TipoFactura={tipo_factura}&"
+        f"CuotaTotal={cuota_fmt}&"
+        f"ImporteTotal={importe_fmt}&"
+        f"Huella={huella}&"
+        f"FechaHoraHusoGenRegistro={fecha_hora_gen_registro}"
+    )
+
+    return hashlib.sha256(cadena.encode("utf-8")).hexdigest().upper()
