@@ -10,9 +10,6 @@ import streamlit as st
 from database import init_supabase
 from verifactu_utils import generar_url_qr_verifactu, formatear_fecha_verifactu
 
-# ============================================================
-# REPORTLAB - Importaciones globales
-# ============================================================
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
 from reportlab.lib import colors
@@ -22,6 +19,7 @@ from reportlab.platypus import (
 )
 from reportlab.lib.utils import ImageReader
 from reportlab.lib.enums import TA_LEFT, TA_RIGHT, TA_CENTER
+
 
 # -----------------------------------------------------------
 # UTILIDADES DE IMAGEN Y TEXTO
@@ -33,7 +31,6 @@ def _logo_sanitized(url):
 
 
 def _get_reportlab_logo(logo_input, max_w=180, max_h=80):
-    """Carga imágenes para ReportLab desde URL, Base64 o archivo local."""
     if not logo_input:
         return None
     logo_input = str(logo_input).strip()
@@ -42,7 +39,6 @@ def _get_reportlab_logo(logo_input, max_w=180, max_h=80):
 
     try:
         from PIL import Image as PILImage
-
         img_bytes = None
 
         if logo_input.startswith("data:image"):
@@ -73,28 +69,17 @@ def _get_reportlab_logo(logo_input, max_w=180, max_h=80):
 
 
 def get_qr_base64(invoice, client, company_config):
-    """
-    Genera QR Veri*Factu con formato oficial AEAT.
-
-    URL: https://www2.agenciatributaria.gob.es/wlpl/TIKE-CONT/ValidarQR
-    Parámetros: nif, numserie, fecha (DD-MM-AAAA), importe
-
-    NO incluye hash (según especificación oficial).
-    """
+    """Genera QR Veri*Factu con formato oficial AEAT (sin hash)."""
     invoice_number = invoice.get('invoice_number', '')
     if not invoice_number:
         return ""
 
-    # Construir numserie = serie + numero
-    # El formato de invoice_number es "SERIE-NUMERO" (ej: "F2026-0002")
-    # o "SERIE/NUMERO" según el código original
     numserie = invoice_number.replace("/", "-").strip()
 
     nif_emisor = company_config.get('company_tax_id', '')
     if not nif_emisor:
         return ""
 
-    # Fecha de expedición en formato DD-MM-AAAA
     fecha_raw = invoice.get('date', '')
     if not fecha_raw:
         return ""
@@ -102,14 +87,9 @@ def get_qr_base64(invoice, client, company_config):
     try:
         fecha_verifactu = formatear_fecha_verifactu(str(fecha_raw))
     except Exception:
-        # Si la fecha ya viene en DD-MM-AAAA, la usamos tal cual
         fecha_verifactu = str(fecha_raw)
 
     importe_total = invoice.get('total', 0)
-
-    # Determinar si es producción o pruebas
-    # Por defecto producción; cambiar a False si quieres pruebas
-    produccion = True
 
     try:
         qr_data = generar_url_qr_verifactu(
@@ -117,7 +97,7 @@ def get_qr_base64(invoice, client, company_config):
             num_serie_factura=numserie,
             fecha_expedicion=fecha_verifactu,
             importe_total=float(importe_total),
-            produccion=produccion,
+            produccion=True,
         )
     except Exception as e:
         st.error(f"Error generando URL QR Verifactu: {e}")
@@ -133,7 +113,6 @@ def get_qr_base64(invoice, client, company_config):
 
 
 def _get_qr_image(invoice, client, company_config, max_size=80):
-    """Genera imagen QR para ReportLab."""
     qr_base64 = get_qr_base64(invoice, client, company_config)
     if not qr_base64:
         return None
@@ -144,14 +123,7 @@ def _get_qr_image(invoice, client, company_config, max_size=80):
         return None
 
 
-# -----------------------------------------------------------
-# FUNCIONES AUXILIARES DE TEXTO
-# -----------------------------------------------------------
 def split_description_into_paragraphs(desc_text):
-    """
-    Divide el texto en párrafos e ignora/elimina por completo todos los símbolos
-    de bloques negros o formas geométricas Unicode.
-    """
     if not desc_text:
         return [""]
 
@@ -188,7 +160,6 @@ def split_description_into_paragraphs(desc_text):
 
 
 def _fmt_money(valor):
-    """Formatea valor como moneda."""
     try:
         return f"{float(valor):,.2f} €"
     except (ValueError, TypeError):
@@ -196,162 +167,68 @@ def _fmt_money(valor):
 
 
 # -----------------------------------------------------------
-# FACTURA (REPORTLAB)
+# FACTURA
 # -----------------------------------------------------------
 def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
-    """
-    Genera PDF de factura usando ReportLab.
-    """
     styles = getSampleStyleSheet()
 
     company_style = ParagraphStyle(
-        'CompanyStyle',
-        parent=styles['Heading2'],
-        fontSize=14,
-        leading=16,
-        textColor=colors.HexColor('#1E3A8A'),
-        spaceAfter=2,
+        'CompanyStyle', parent=styles['Heading2'], fontSize=14, leading=16,
+        textColor=colors.HexColor('#1E3A8A'), spaceAfter=2,
     )
-
     company_info_style = ParagraphStyle(
-        'CompanyInfoStyle',
-        parent=styles['Normal'],
-        fontSize=9,
-        leading=11,
-        textColor=colors.HexColor('#4A5568'),
-        spaceAfter=1,
+        'CompanyInfoStyle', parent=styles['Normal'], fontSize=9, leading=11,
+        textColor=colors.HexColor('#4A5568'), spaceAfter=1,
     )
-
     title_style = ParagraphStyle(
-        'TitleStyle',
-        parent=styles['Title'],
-        fontSize=18,
-        leading=21,
-        textColor=colors.HexColor('#1E3A8A'),
-        spaceAfter=4,
-        alignment=TA_CENTER,
+        'TitleStyle', parent=styles['Title'], fontSize=18, leading=21,
+        textColor=colors.HexColor('#1E3A8A'), spaceAfter=4, alignment=TA_CENTER,
     )
-
     meta_label_style = ParagraphStyle(
-        'MetaLabelStyle',
-        parent=styles['Normal'],
-        fontSize=9,
-        leading=11,
-        textColor=colors.HexColor('#2D3748'),
-        spaceAfter=1,
+        'MetaLabelStyle', parent=styles['Normal'], fontSize=9, leading=11,
+        textColor=colors.HexColor('#2D3748'), spaceAfter=1,
     )
-
     desc_style = ParagraphStyle(
-        'DescStyle',
-        parent=styles['Normal'],
-        fontSize=9,
-        leading=11,
-        textColor=colors.HexColor('#2D3748'),
-        spaceBefore=0,
-        spaceAfter=0,
-        alignment=TA_LEFT,
+        'DescStyle', parent=styles['Normal'], fontSize=9, leading=11,
+        textColor=colors.HexColor('#2D3748'), spaceBefore=0, spaceAfter=0, alignment=TA_LEFT,
     )
-
     desc_header_style = ParagraphStyle(
-        'DescHeaderStyle',
-        parent=styles['Normal'],
-        fontSize=9,
-        leading=11,
-        textColor=colors.white,
-        fontName='Helvetica-Bold',
-        spaceBefore=0,
-        spaceAfter=0,
-        alignment=TA_LEFT,
+        'DescHeaderStyle', parent=styles['Normal'], fontSize=9, leading=11,
+        textColor=colors.white, fontName='Helvetica-Bold', spaceBefore=0, spaceAfter=0, alignment=TA_LEFT,
     )
-
     num_style = ParagraphStyle(
-        'NumStyle',
-        parent=styles['Normal'],
-        fontSize=9,
-        leading=11,
-        textColor=colors.HexColor('#2D3748'),
-        spaceBefore=0,
-        spaceAfter=0,
-        alignment=TA_RIGHT,
+        'NumStyle', parent=styles['Normal'], fontSize=9, leading=11,
+        textColor=colors.HexColor('#2D3748'), spaceBefore=0, spaceAfter=0, alignment=TA_RIGHT,
     )
-
     num_header_style = ParagraphStyle(
-        'NumHeaderStyle',
-        parent=styles['Normal'],
-        fontSize=9,
-        leading=11,
-        textColor=colors.white,
-        fontName='Helvetica-Bold',
-        spaceBefore=0,
-        spaceAfter=0,
-        alignment=TA_RIGHT,
+        'NumHeaderStyle', parent=styles['Normal'], fontSize=9, leading=11,
+        textColor=colors.white, fontName='Helvetica-Bold', spaceBefore=0, spaceAfter=0, alignment=TA_RIGHT,
     )
-
     center_style = ParagraphStyle(
-        'CenterStyle',
-        parent=styles['Normal'],
-        fontSize=9,
-        leading=11,
-        textColor=colors.HexColor('#2D3748'),
-        spaceBefore=0,
-        spaceAfter=0,
-        alignment=TA_CENTER,
+        'CenterStyle', parent=styles['Normal'], fontSize=9, leading=11,
+        textColor=colors.HexColor('#2D3748'), spaceBefore=0, spaceAfter=0, alignment=TA_CENTER,
     )
-
     center_header_style = ParagraphStyle(
-        'CenterHeaderStyle',
-        parent=styles['Normal'],
-        fontSize=9,
-        leading=11,
-        textColor=colors.white,
-        fontName='Helvetica-Bold',
-        spaceBefore=0,
-        spaceAfter=0,
-        alignment=TA_CENTER,
+        'CenterHeaderStyle', parent=styles['Normal'], fontSize=9, leading=11,
+        textColor=colors.white, fontName='Helvetica-Bold', spaceBefore=0, spaceAfter=0, alignment=TA_CENTER,
     )
-
     total_label_style = ParagraphStyle(
-        'TotalLabelStyle',
-        parent=styles['Normal'],
-        fontSize=10,
-        leading=12,
-        textColor=colors.HexColor('#2D3748'),
-        spaceBefore=0,
-        spaceAfter=0,
-        alignment=TA_LEFT,
+        'TotalLabelStyle', parent=styles['Normal'], fontSize=10, leading=12,
+        textColor=colors.HexColor('#2D3748'), spaceBefore=0, spaceAfter=0, alignment=TA_LEFT,
     )
-
     total_value_style = ParagraphStyle(
-        'TotalValueStyle',
-        parent=styles['Normal'],
-        fontSize=10,
-        leading=12,
-        textColor=colors.HexColor('#1E3A8A'),
-        spaceBefore=0,
-        spaceAfter=0,
-        alignment=TA_RIGHT,
-        fontName='Helvetica-Bold',
+        'TotalValueStyle', parent=styles['Normal'], fontSize=10, leading=12,
+        textColor=colors.HexColor('#1E3A8A'), spaceBefore=0, spaceAfter=0,
+        alignment=TA_RIGHT, fontName='Helvetica-Bold',
     )
-
     total_final_style = ParagraphStyle(
-        'TotalFinalStyle',
-        parent=styles['Normal'],
-        fontSize=12,
-        leading=14,
-        textColor=colors.HexColor('#1E3A8A'),
-        spaceBefore=0,
-        spaceAfter=0,
-        alignment=TA_RIGHT,
-        fontName='Helvetica-Bold',
+        'TotalFinalStyle', parent=styles['Normal'], fontSize=12, leading=14,
+        textColor=colors.HexColor('#1E3A8A'), spaceBefore=0, spaceAfter=0,
+        alignment=TA_RIGHT, fontName='Helvetica-Bold',
     )
-
     footer_style = ParagraphStyle(
-        'FooterStyle',
-        parent=styles['Normal'],
-        fontSize=8,
-        leading=10,
-        textColor=colors.HexColor('#718096'),
-        alignment=TA_CENTER,
+        'FooterStyle', parent=styles['Normal'], fontSize=8, leading=10,
+        textColor=colors.HexColor('#718096'), alignment=TA_CENTER,
     )
 
     PAGE_WIDTH, PAGE_HEIGHT = A4
@@ -381,12 +258,9 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
 
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
-        buffer,
-        pagesize=A4,
-        leftMargin=MARGIN_LEFT,
-        rightMargin=MARGIN_RIGHT,
-        topMargin=MARGIN_TOP,
-        bottomMargin=MARGIN_BOTTOM,
+        buffer, pagesize=A4,
+        leftMargin=MARGIN_LEFT, rightMargin=MARGIN_RIGHT,
+        topMargin=MARGIN_TOP, bottomMargin=MARGIN_BOTTOM,
     )
 
     story = []
@@ -419,7 +293,6 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
         ('LINEBELOW', (0, -1), (-1, -1), 1.5, colors.HexColor('#1E3A8A')),
     ]))
-
     story.append(header_table)
     story.append(Spacer(1, 10))
 
@@ -434,22 +307,10 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
     story.append(Spacer(1, 6))
 
     meta_data = [
-        [
-            Paragraph(f"<b>DATOS DEL CLIENTE</b>", meta_label_style),
-            Paragraph(f"<b>Fecha:</b> {invoice_date}", meta_label_style),
-        ],
-        [
-            Paragraph(client_name, meta_label_style),
-            Paragraph(f"<b>Periodo:</b> {invoice_month}", meta_label_style),
-        ],
-        [
-            Paragraph(f"NIF: {client_tax_id}", meta_label_style),
-            Paragraph(f"<b>Estado:</b> {invoice_status}", meta_label_style),
-        ],
-        [
-            Paragraph(client_address, meta_label_style),
-            Paragraph("", meta_label_style),
-        ],
+        [Paragraph(f"<b>DATOS DEL CLIENTE</b>", meta_label_style), Paragraph(f"<b>Fecha:</b> {invoice_date}", meta_label_style)],
+        [Paragraph(client_name, meta_label_style), Paragraph(f"<b>Periodo:</b> {invoice_month}", meta_label_style)],
+        [Paragraph(f"NIF: {client_tax_id}", meta_label_style), Paragraph(f"<b>Estado:</b> {invoice_status}", meta_label_style)],
+        [Paragraph(client_address, meta_label_style), Paragraph("", meta_label_style)],
     ]
 
     meta_table = Table(meta_data, colWidths=[PRINTABLE_WIDTH * 0.65, PRINTABLE_WIDTH * 0.35])
@@ -460,7 +321,6 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         ('RIGHTPADDING', (0, 0), (-1, -1), 0),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
     ]))
-
     story.append(meta_table)
     story.append(Spacer(1, 8))
 
@@ -521,7 +381,6 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         ('LINEBELOW', (0, 1), (-1, -1), 0.3, colors.HexColor('#E2E8F0')),
         ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
     ]))
-
     story.append(lines_table)
     story.append(Spacer(1, 8))
 
@@ -532,12 +391,8 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         [Paragraph('Base imponible:', total_label_style), Paragraph(_fmt_money(invoice.get('base_amount', 0)), total_value_style)],
         [Paragraph(f'IVA ({vat_pct_display:.0f}%):', total_label_style), Paragraph(_fmt_money(invoice.get('vat_amount', 0)), total_value_style)],
         [Paragraph(f'IRPF ({irpf_pct_display:.0f}%):', total_label_style), Paragraph(f"-{_fmt_money(invoice.get('irpf_amount', 0))}", total_value_style)],
+        [Paragraph('<b>TOTAL A PAGAR:</b>', total_final_style), Paragraph(f'<b>{_fmt_money(invoice.get("total", 0))}</b>', total_final_style)],
     ]
-
-    totals_data.append([
-        Paragraph('<b>TOTAL A PAGAR:</b>', total_final_style),
-        Paragraph(f'<b>{_fmt_money(invoice.get("total", 0))}</b>', total_final_style),
-    ])
 
     totals_table = Table(totals_data, colWidths=[totals_width * 0.50, totals_width * 0.50])
     totals_table.setStyle(TableStyle([
@@ -554,7 +409,6 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         ('LEFTPADDING', (0, 0), (-1, -1), 0),
         ('RIGHTPADDING', (0, 0), (-1, -1), 0),
     ]))
-
     story.append(totals_wrapper)
     story.append(Spacer(1, 8))
 
@@ -591,160 +445,65 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
 # PRESUPUESTO
 # -----------------------------------------------------------
 def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_pct, budget_number=None):
-    """
-    Genera PDF de presupuesto con maquetación compacta y profesional.
-    """
     styles = getSampleStyleSheet()
 
     company_style = ParagraphStyle(
-        'CompanyStyle',
-        parent=styles['Heading2'],
-        fontSize=15,
-        leading=18,
-        textColor=colors.HexColor('#1E3A8A'),
-        spaceAfter=3,
+        'CompanyStyle', parent=styles['Heading2'], fontSize=15, leading=18,
+        textColor=colors.HexColor('#1E3A8A'), spaceAfter=3,
     )
-
     company_info_style = ParagraphStyle(
-        'CompanyInfoStyle',
-        parent=styles['Normal'],
-        fontSize=10,
-        leading=13,
-        textColor=colors.HexColor('#4A5568'),
-        spaceAfter=2,
+        'CompanyInfoStyle', parent=styles['Normal'], fontSize=10, leading=13,
+        textColor=colors.HexColor('#4A5568'), spaceAfter=2,
     )
-
     title_style = ParagraphStyle(
-        'TitleStyle',
-        parent=styles['Title'],
-        fontSize=18,
-        leading=21,
-        textColor=colors.HexColor('#1E3A8A'),
-        spaceAfter=6,
-        alignment=TA_CENTER,
+        'TitleStyle', parent=styles['Title'], fontSize=18, leading=21,
+        textColor=colors.HexColor('#1E3A8A'), spaceAfter=6, alignment=TA_CENTER,
     )
-
     client_info_style = ParagraphStyle(
-        'ClientInfoStyle',
-        parent=styles['Normal'],
-        fontSize=10,
-        leading=13,
-        textColor=colors.HexColor('#2D3748'),
-        spaceAfter=2,
-        alignment=TA_CENTER,
+        'ClientInfoStyle', parent=styles['Normal'], fontSize=10, leading=13,
+        textColor=colors.HexColor('#2D3748'), spaceAfter=2, alignment=TA_CENTER,
     )
-
     desc_style = ParagraphStyle(
-        'DescStyle',
-        parent=styles['Normal'],
-        fontSize=10,
-        leading=14,
-        textColor=colors.HexColor('#2D3748'),
-        spaceBefore=0,
-        spaceAfter=0,
-        alignment=TA_LEFT,
+        'DescStyle', parent=styles['Normal'], fontSize=10, leading=14,
+        textColor=colors.HexColor('#2D3748'), spaceBefore=0, spaceAfter=0, alignment=TA_LEFT,
     )
-
     desc_header_style = ParagraphStyle(
-        'DescHeaderStyle',
-        parent=styles['Normal'],
-        fontSize=10,
-        leading=12,
-        textColor=colors.white,
-        fontName='Helvetica-Bold',
-        spaceBefore=0,
-        spaceAfter=0,
-        alignment=TA_LEFT,
+        'DescHeaderStyle', parent=styles['Normal'], fontSize=10, leading=12,
+        textColor=colors.white, fontName='Helvetica-Bold', spaceBefore=0, spaceAfter=0, alignment=TA_LEFT,
     )
-
     num_style = ParagraphStyle(
-        'NumStyle',
-        parent=styles['Normal'],
-        fontSize=10,
-        leading=14,
-        textColor=colors.HexColor('#2D3748'),
-        spaceBefore=0,
-        spaceAfter=0,
-        alignment=TA_RIGHT,
+        'NumStyle', parent=styles['Normal'], fontSize=10, leading=14,
+        textColor=colors.HexColor('#2D3748'), spaceBefore=0, spaceAfter=0, alignment=TA_RIGHT,
     )
-
     num_header_style = ParagraphStyle(
-        'NumHeaderStyle',
-        parent=styles['Normal'],
-        fontSize=10,
-        leading=12,
-        textColor=colors.white,
-        fontName='Helvetica-Bold',
-        spaceBefore=0,
-        spaceAfter=0,
-        alignment=TA_RIGHT,
+        'NumHeaderStyle', parent=styles['Normal'], fontSize=10, leading=12,
+        textColor=colors.white, fontName='Helvetica-Bold', spaceBefore=0, spaceAfter=0, alignment=TA_RIGHT,
     )
-
     center_style = ParagraphStyle(
-        'CenterStyle',
-        parent=styles['Normal'],
-        fontSize=10,
-        leading=14,
-        textColor=colors.HexColor('#2D3748'),
-        spaceBefore=0,
-        spaceAfter=0,
-        alignment=TA_CENTER,
+        'CenterStyle', parent=styles['Normal'], fontSize=10, leading=14,
+        textColor=colors.HexColor('#2D3748'), spaceBefore=0, spaceAfter=0, alignment=TA_CENTER,
     )
-
     center_header_style = ParagraphStyle(
-        'CenterHeaderStyle',
-        parent=styles['Normal'],
-        fontSize=10,
-        leading=12,
-        textColor=colors.white,
-        fontName='Helvetica-Bold',
-        spaceBefore=0,
-        spaceAfter=0,
-        alignment=TA_CENTER,
+        'CenterHeaderStyle', parent=styles['Normal'], fontSize=10, leading=12,
+        textColor=colors.white, fontName='Helvetica-Bold', spaceBefore=0, spaceAfter=0, alignment=TA_CENTER,
     )
-
     total_label_style = ParagraphStyle(
-        'TotalLabelStyle',
-        parent=styles['Normal'],
-        fontSize=10,
-        leading=13,
-        textColor=colors.HexColor('#2D3748'),
-        spaceBefore=0,
-        spaceAfter=0,
-        alignment=TA_LEFT,
+        'TotalLabelStyle', parent=styles['Normal'], fontSize=10, leading=13,
+        textColor=colors.HexColor('#2D3748'), spaceBefore=0, spaceAfter=0, alignment=TA_LEFT,
     )
-
     total_value_style = ParagraphStyle(
-        'TotalValueStyle',
-        parent=styles['Normal'],
-        fontSize=10,
-        leading=13,
-        textColor=colors.HexColor('#1E3A8A'),
-        spaceBefore=0,
-        spaceAfter=0,
-        alignment=TA_RIGHT,
-        fontName='Helvetica-Bold',
+        'TotalValueStyle', parent=styles['Normal'], fontSize=10, leading=13,
+        textColor=colors.HexColor('#1E3A8A'), spaceBefore=0, spaceAfter=0,
+        alignment=TA_RIGHT, fontName='Helvetica-Bold',
     )
-
     total_final_style = ParagraphStyle(
-        'TotalFinalStyle',
-        parent=styles['Normal'],
-        fontSize=13,
-        leading=16,
-        textColor=colors.HexColor('#1E3A8A'),
-        spaceBefore=0,
-        spaceAfter=0,
-        alignment=TA_RIGHT,
-        fontName='Helvetica-Bold',
+        'TotalFinalStyle', parent=styles['Normal'], fontSize=13, leading=16,
+        textColor=colors.HexColor('#1E3A8A'), spaceBefore=0, spaceAfter=0,
+        alignment=TA_RIGHT, fontName='Helvetica-Bold',
     )
-
     footer_style = ParagraphStyle(
-        'FooterStyle',
-        parent=styles['Normal'],
-        fontSize=9,
-        leading=11,
-        textColor=colors.HexColor('#718096'),
-        alignment=TA_CENTER,
+        'FooterStyle', parent=styles['Normal'], fontSize=9, leading=11,
+        textColor=colors.HexColor('#718096'), alignment=TA_CENTER,
     )
 
     PAGE_WIDTH, PAGE_HEIGHT = A4
@@ -756,12 +515,9 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
 
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
-        buffer,
-        pagesize=A4,
-        leftMargin=MARGIN_LEFT,
-        rightMargin=MARGIN_RIGHT,
-        topMargin=MARGIN_TOP,
-        bottomMargin=MARGIN_BOTTOM,
+        buffer, pagesize=A4,
+        leftMargin=MARGIN_LEFT, rightMargin=MARGIN_RIGHT,
+        topMargin=MARGIN_TOP, bottomMargin=MARGIN_BOTTOM,
     )
 
     story = []
@@ -804,7 +560,6 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
         ('RIGHTPADDING', (0, 0), (-1, -1), 0),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
     ]))
-
     story.append(header_table)
     story.append(Spacer(1, 10))
 
@@ -825,7 +580,6 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
     col_qty_width = PRINTABLE_WIDTH * 0.08
     col_price_width = PRINTABLE_WIDTH * 0.12
     col_total_width = PRINTABLE_WIDTH * 0.12
-
     col_widths = [col_desc_width, col_qty_width, col_price_width, col_total_width]
 
     headers = [
@@ -876,4 +630,67 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
         ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
         ('LEFTPADDING', (0, 0), (-1, -1), 5),
         ('RIGHTPADDING', (0, 0), (-1, -1), 5),
-        ('LINE
+        ('LINEBELOW', (0, 0), (-1, 0), 1, colors.HexColor('#1E3A8A')),
+    ]
+
+    for idx in item_end_indices:
+        table_style.append(('LINEBELOW', (0, idx), (-1, idx), 0.5, colors.HexColor('#CBD5E0')))
+
+    lines_table.setStyle(TableStyle(table_style))
+    story.append(lines_table)
+    story.append(Spacer(1, 10))
+
+    vat_pct_display = vat_pct or 0
+    totals_width = PRINTABLE_WIDTH * 0.40
+    totals_left_offset = PRINTABLE_WIDTH - totals_width
+
+    totals_data = [
+        [Paragraph('Base imponible:', total_label_style), Paragraph(_fmt_money(base_total), total_value_style)],
+        [Paragraph(f'IVA ({vat_pct_display:.1f}%):', total_label_style), Paragraph(_fmt_money(vat_total), total_value_style)],
+    ]
+
+    irpf_total = sum(l.get('irpf_amount', 0) for l in lineas)
+    if irpf_total > 0:
+        irpf_pct = lineas[0].get('irpf_percentage', 0) if lineas else 0
+        totals_data.append([
+            Paragraph(f'IRPF ({irpf_pct:.1f}%):', total_label_style),
+            Paragraph(f'-{_fmt_money(irpf_total)}', total_value_style)
+        ])
+
+    totals_data.append([
+        Paragraph('<b>TOTAL:</b>', total_final_style),
+        Paragraph(f'<b>{_fmt_money(total)}</b>', total_final_style),
+    ])
+
+    totals_table = Table(totals_data, colWidths=[totals_width * 0.45, totals_width * 0.55])
+    totals_table.setStyle(TableStyle([
+        ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+        ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ('LEFTPADDING', (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('LINEABOVE', (0, -1), (-1, -1), 1, colors.HexColor('#1E3A8A')),
+    ]))
+
+    totals_wrapper = Table([['', totals_table]], colWidths=[totals_left_offset, totals_width])
+    totals_wrapper.setStyle(TableStyle([
+        ('LEFTPADDING', (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('TOPPADDING', (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+    ]))
+    story.append(totals_wrapper)
+    story.append(Spacer(1, 15))
+
+    story.append(Paragraph(
+        "Presupuesto válido por 30 días · Gracias por confiar en nosotros",
+        footer_style
+    ))
+
+    doc.build(story)
+    pdf_bytes = buffer.getvalue()
+    buffer.close()
+
+    return pdf_bytes
