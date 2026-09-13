@@ -1570,15 +1570,31 @@ elif menu == "💰 Ventas":
     else:
         st.info("No hay facturas emitidas.")
 # ════════════════════════════════════════════════════════════
-# COMPRAS (CORREGIDO - IVA 0% para Seguridad Social)
+# COMPRAS (CORREGIDO - IVA 0% para Seguridad Social + Cuenta PGC)
 # ════════════════════════════════════════════════════════════
 elif menu == "🛒 Compras":
     st.title("Gastos / Compras")
+
+    # ────────────────────────────────────────────────────────
+    # MAPA DE CUENTAS CONTABLES (Plan General Contable Español)
+    # ────────────────────────────────────────────────────────
+    CUENTAS_GASTO = {
+        "Compras / Materiales (6000)": "6000 Compras",
+        "Seguridad Social / RETA Autónomos (6420)": "6420 Seguridad Social",
+        "Gestoría / Asesoría / Abogados (6230)": "6230 Servicios Profesionales Independientes",
+        "Primas de Seguros (6250)": "6250 Primas de Seguros",
+        "Servicios Web, Hosting y Dominios (6290)": "6290 Servicios Web y Software",
+        "Suministros (Luz, Agua, Teléfono/Internet) (6280)": "6280 Suministros",
+        "Otros Gastos Generales (6290)": "6290 Otros Servicios",
+    }
+
     proveedores_df = get_suppliers(user_id)
+
     if "modo_edicion_gasto" not in st.session_state:
         st.session_state.modo_edicion_gasto = False
         st.session_state.gasto_editando_id = None
         st.session_state.datos_edicion_gasto = {}
+
     if proveedores_df.empty:
         st.warning("Primero registra algún proveedor.")
     else:
@@ -1588,14 +1604,23 @@ elif menu == "🛒 Compras":
                 fecha = st.date_input("Fecha", datetime.now())
                 mes = LISTA_MESES[fecha.month - 1]
                 st.caption(f"📅 Mes: **{mes}**")
+
                 prov_nombre = st.selectbox("Proveedor", options=proveedores_df["name"].tolist())
                 tipo_gasto = st.selectbox("Tipo de gasto", TIPOS_GASTO)
+
+                # Selector de cuenta contable del PGC
+                cuenta_label = st.selectbox(
+                    "Cuenta contable",
+                    options=list(CUENTAS_GASTO.keys()),
+                    index=0,
+                    key="add_expense_cuenta",
+                    help="Determina la cuenta del PGC donde se registrará este gasto."
+                )
+
                 concepto = st.text_input("Concepto (descripción adicional)")
                 base = st.number_input("Base imponible", min_value=0.0, step=10.0)
-                
-                # ============================================================
-                # CORRECCIÓN: Seguridad Social → IVA forzado a 0%
-                # ============================================================
+
+                # Seguridad Social → IVA forzado a 0%
                 if tipo_gasto == "Seguridad Social":
                     vat_pct = 0.0
                     st.info("ℹ️ **Seguridad Social** → IVA exento (0%). Es un gasto deducible sin IVA soportado.")
@@ -1609,22 +1634,25 @@ elif menu == "🛒 Compras":
                     )
                 else:
                     vat_pct = st.number_input("% IVA", value=21.0, step=1.0)
-                
+
                 archivo = st.file_uploader("Subir factura (PDF o imagen)", type=["pdf", "png", "jpg", "jpeg"])
-                
+
                 if st.form_submit_button("Guardar") and num:
                     id_prov = proveedores_df.loc[proveedores_df["name"] == prov_nombre, "id"].values[0]
                     vat_amount = base * vat_pct / 100.0
                     total = base + vat_amount
+
                     attachment_url = None
                     if archivo is not None:
-                        file_ext = archivo.name.split(".")[-1]
                         file_path = f"{user_id}/{datetime.now().strftime('%Y%m%d%H%M%S')}_{archivo.name}"
                         try:
-                            supabase.storage.from_("facturas_gastos").upload(file_path, archivo.getvalue(), {"content-type": archivo.type})
+                            supabase.storage.from_("facturas_gastos").upload(
+                                file_path, archivo.getvalue(), {"content-type": archivo.type}
+                            )
                             attachment_url = supabase.storage.from_("facturas_gastos").get_public_url(file_path)
                         except Exception as e:
                             st.error(f"Error al subir archivo: {e}")
+
                     expense_data = {
                         "user_id": user_id,
                         "expense_number": num.strip(),
@@ -1637,12 +1665,17 @@ elif menu == "🛒 Compras":
                         "vat_percentage": vat_pct,
                         "vat_amount": vat_amount,
                         "total": total,
-                        "attachment_url": attachment_url
+                        "attachment_url": attachment_url,
                     }
+
+                    cuenta_seleccionada = CUENTAS_GASTO[cuenta_label]
+
                     with st.spinner("Registrando gasto..."):
                         exito, expense_id, mensaje = crear_gasto_con_rollback(
-                            expense_data, user_id, prov_nombre
+                            expense_data, user_id, prov_nombre,
+                            cuenta_gasto=cuenta_seleccionada,
                         )
+
                     if exito:
                         st.toast("✅ Gasto registrado correctamente", icon="✅")
                         st.success(mensaje)
@@ -1651,18 +1684,20 @@ elif menu == "🛒 Compras":
                         st.rerun()
                     else:
                         st.error(mensaje)
-        
+
         # ============================================================
         # EDICIÓN DE GASTO
         # ============================================================
         if st.session_state.modo_edicion_gasto:
             st.warning("Editando gasto")
             datos = st.session_state.datos_edicion_gasto
+
             with st.form("edit_expense_form"):
                 num = st.text_input("Nº Factura Proveedor", value=datos.get("expense_number", ""))
                 fecha = st.date_input("Fecha", value=pd.to_datetime(datos.get("date", datetime.now())))
                 mes = LISTA_MESES[fecha.month - 1]
                 st.caption(f"📅 Mes: **{mes}**")
+
                 lista_proveedores = proveedores_df["name"].tolist()
                 provider_name = datos.get("provider_name", "")
                 try:
@@ -1670,13 +1705,24 @@ elif menu == "🛒 Compras":
                 except ValueError:
                     index_prov = 0
                 prov_nombre = st.selectbox("Proveedor", options=lista_proveedores, index=index_prov)
-                tipo_gasto = st.selectbox("Tipo de gasto", TIPOS_GASTO, index=TIPOS_GASTO.index(datos.get("expense_type", "Otros")) if datos.get("expense_type", "Otros") in TIPOS_GASTO else 0)
+
+                tipo_gasto = st.selectbox(
+                    "Tipo de gasto", TIPOS_GASTO,
+                    index=TIPOS_GASTO.index(datos.get("expense_type", "Otros")) if datos.get("expense_type", "Otros") in TIPOS_GASTO else 0
+                )
+
+                cuenta_label_edit = st.selectbox(
+                    "Cuenta contable",
+                    options=list(CUENTAS_GASTO.keys()),
+                    index=0,
+                    key="edit_expense_cuenta",
+                    help="Cuenta del PGC donde se registra este gasto."
+                )
+
                 concepto = st.text_input("Concepto", value=datos.get("category", ""))
                 base = st.number_input("Base imponible", value=float(datos.get("base_amount", 0)), min_value=0.0, step=10.0)
-                
-                # ============================================================
-                # CORRECCIÓN: Seguridad Social → IVA forzado a 0% (edición)
-                # ============================================================
+
+                # Seguridad Social → IVA forzado a 0% (edición)
                 if tipo_gasto == "Seguridad Social":
                     vat_pct = 0.0
                     st.info("ℹ️ **Seguridad Social** → IVA exento (0%).")
@@ -1690,12 +1736,16 @@ elif menu == "🛒 Compras":
                     )
                 else:
                     vat_pct = st.number_input("% IVA", value=float(datos.get("vat_percentage", 21)), step=1.0)
-                
-                nuevo_archivo = st.file_uploader("Cambiar archivo (dejar vacío para mantener actual)", type=["pdf", "png", "jpg", "jpeg"])
-                
+
+                nuevo_archivo = st.file_uploader(
+                    "Cambiar archivo (dejar vacío para mantener actual)",
+                    type=["pdf", "png", "jpg", "jpeg"]
+                )
+
                 if st.form_submit_button("Guardar cambios"):
                     vat_amount = base * vat_pct / 100.0
                     total = base + vat_amount
+
                     updates = {
                         "expense_number": num.strip(),
                         "date": str(fecha),
@@ -1706,16 +1756,19 @@ elif menu == "🛒 Compras":
                         "base_amount": base,
                         "vat_percentage": vat_pct,
                         "vat_amount": vat_amount,
-                        "total": total
+                        "total": total,
                     }
+
                     if nuevo_archivo is not None:
-                        file_ext = nuevo_archivo.name.split(".")[-1]
                         file_path = f"{user_id}/{datetime.now().strftime('%Y%m%d%H%M%S')}_{nuevo_archivo.name}"
                         try:
-                            supabase.storage.from_("facturas_gastos").upload(file_path, nuevo_archivo.getvalue(), {"content-type": nuevo_archivo.type})
+                            supabase.storage.from_("facturas_gastos").upload(
+                                file_path, nuevo_archivo.getvalue(), {"content-type": nuevo_archivo.type}
+                            )
                             updates["attachment_url"] = supabase.storage.from_("facturas_gastos").get_public_url(file_path)
                         except Exception as e:
                             st.error(f"Error al subir nuevo archivo: {e}")
+
                     try:
                         supabase.table("expenses_v2").update(updates).eq("id", st.session_state.gasto_editando_id).execute()
                         st.success("Gasto actualizado")
@@ -1724,6 +1777,7 @@ elif menu == "🛒 Compras":
                         st.rerun()
                     except Exception as e:
                         st.error(f"Error al actualizar gasto: {e}")
+
                 if st.form_submit_button("Cancelar edición"):
                     st.session_state.modo_edicion_gasto = False
                     st.rerun()
@@ -1740,9 +1794,11 @@ elif menu == "🛒 Compras":
             exp_display["Proveedor"] = exp_display["supplier_name"]
         else:
             exp_display["Proveedor"] = "Sin proveedor"
+
         exp_display = exp_display[["expense_number", "date", "Proveedor", "expense_type", "concept", "base_amount", "total"]].copy()
         exp_display.columns = ["Nº Factura", "Fecha", "Proveedor", "Tipo Gasto", "Concepto", "Base Imponible", "Total"]
         exp_display["Fecha"] = pd.to_datetime(exp_display["Fecha"]).dt.strftime("%d/%m/%Y")
+
         column_config = {
             "Nº Factura": st.column_config.TextColumn("Nº Factura", width="small"),
             "Fecha": st.column_config.TextColumn("Fecha", width="small"),
@@ -1752,15 +1808,27 @@ elif menu == "🛒 Compras":
             "Base Imponible": st.column_config.NumberColumn("Base Imponible", format="%.2f €", width="small"),
             "Total": st.column_config.NumberColumn("Total", format="%.2f €", width="small"),
         }
+
         st.subheader("Gastos registrados")
-        event = st.dataframe(exp_display, hide_index=True, use_container_width=True, column_config=column_config, selection_mode="single-row", on_select="rerun", key="gastos_table")
+        event = st.dataframe(
+            exp_display,
+            hide_index=True,
+            use_container_width=True,
+            column_config=column_config,
+            selection_mode="single-row",
+            on_select="rerun",
+            key="gastos_table"
+        )
+
         if (event.selection and event.selection.rows and len(event.selection.rows) > 0):
             selected_row = event.selection.rows[0]
             if selected_row is not None and 0 <= selected_row < len(exp_df):
                 gasto_seleccionado = exp_df.iloc[selected_row]
                 gasto_row = gasto_seleccionado.to_dict()
+
                 st.markdown("---")
                 st.subheader(f"Acciones para gasto {gasto_row['expense_number']}")
+
                 col1, col2 = st.columns(2)
                 with col1:
                     if st.button("✏️ Rectificar gasto"):
@@ -1775,12 +1843,20 @@ elif menu == "🛒 Compras":
                             "expense_type": gasto_row.get("expense_type", "Otros"),
                             "base_amount": gasto_row["base_amount"],
                             "vat_percentage": gasto_row.get("vat_percentage", 21),
-                            "attachment_url": gasto_row.get("attachment_url", "")
+                            "attachment_url": gasto_row.get("attachment_url", ""),
                         }
                         st.rerun()
+
                 with col2:
-                    confirmado = st.checkbox("Confirmo que deseo eliminar este gasto", key=f"confirm_del_gasto_{gasto_row['id']}")
-                    if st.button("🗑️ Eliminar gasto", key=f"del_gasto_{gasto_row['id']}", disabled=not confirmado):
+                    confirmado = st.checkbox(
+                        "Confirmo que deseo eliminar este gasto",
+                        key=f"confirm_del_gasto_{gasto_row['id']}"
+                    )
+                    if st.button(
+                        "🗑️ Eliminar gasto",
+                        key=f"del_gasto_{gasto_row['id']}",
+                        disabled=not confirmado
+                    ):
                         try:
                             supabase.table("expenses_v2").delete().eq("id", gasto_row["id"]).execute()
                             st.success("Gasto eliminado")
@@ -4376,4 +4452,5 @@ elif menu == "⚙️ Configuración":
                 "prueba_factura.pdf",
                 "application/pdf",
             )
+
 
