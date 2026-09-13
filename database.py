@@ -79,14 +79,12 @@ def generar_hash_factura(
 
     timestamp_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
-    # Normalizar fecha a DD-MM-AAAA
     fecha_str = str(fecha_expedicion)
     if "-" in fecha_str and len(fecha_str) >= 10 and fecha_str[:4].isdigit():
         fecha_verifactu = formatear_fecha_verifactu(fecha_str)
     else:
         fecha_verifactu = fecha_str
 
-    # Normalizar tipo de factura
     tipo_map = {
         "normal": "F1",
         "rectificativa": "R1",
@@ -157,18 +155,15 @@ def generar_asiento_factura(invoice_id, user_id, fecha, base, iva, irpf, total, 
     lineas = [
         {"journal_entry_id": entry_id, "account": "4300 Clientes", "debit": total_cobrar, "credit": 0, "description": "Deudor", "user_id": user_id},
         {"journal_entry_id": entry_id, "account": "7000 Ventas", "debit": 0, "credit": base, "description": "Ingreso", "user_id": user_id},
-        {"journal_entry_id": entry_id, "account": "4770 IVA repercutido", "debit": 0, "credit": iva, "description": "IVA devengado", "user_id": user_id},
     ]
 
-    if irpf > 0:
-        lineas.append({
-            "journal_entry_id": entry_id,
-            "account": "4730 H.P. retenciones",
-            "debit": 0,
-            "credit": irpf,
-            "description": "IRPF retenido",
-            "user_id": user_id,
-        })
+    if iva and iva > 0:
+        lineas.append({"journal_entry_id": entry_id, "account": "4770 IVA repercutido", "debit": 0, "credit": iva, "description": "IVA devengado", "user_id": user_id})
+
+    if irpf and irpf > 0:
+        lineas.append({"journal_entry_id": entry_id, "account": "4730 H.P. retenciones", "debit": 0, "credit": irpf, "description": "IRPF retenido", "user_id": user_id})
+
+    lineas = [l for l in lineas if (l["debit"] or 0) > 0 or (l["credit"] or 0) > 0]
 
     for l in lineas:
         supabase.table("journal_entry_lines").insert(l).execute()
@@ -176,8 +171,24 @@ def generar_asiento_factura(invoice_id, user_id, fecha, base, iva, irpf, total, 
     return entry_id
 
 
-def generar_asiento_gasto(expense_id, user_id, fecha, base, iva, irpf, total, proveedor_nombre):
-    """Genera el asiento contable de un gasto."""
+def generar_asiento_gasto(expense_id, user_id, fecha, base, iva, irpf, total, proveedor_nombre, cuenta_gasto="6000 Compras"):
+    """
+    Genera el asiento contable de un gasto.
+
+    Parámetros:
+    - expense_id: ID del gasto
+    - user_id: ID del usuario
+    - fecha: Fecha del gasto
+    - base: Base imponible
+    - iva: IVA soportado (0 si exento)
+    - irpf: IRPF retenido (0 si no aplica)
+    - total: Total del gasto
+    - proveedor_nombre: Nombre del proveedor
+    - cuenta_gasto: Cuenta contable del PGC (default "6000 Compras")
+
+    NOTA: Solo se insertan líneas con importe > 0 para evitar
+    ruido contable (ej: líneas de IVA al 0% en cuota de autónomos).
+    """
     supabase = _get_supabase()
     check = supabase.table("expenses_v2").select("id").eq("id", expense_id).execute()
     if not check.data:
@@ -196,13 +207,40 @@ def generar_asiento_gasto(expense_id, user_id, fecha, base, iva, irpf, total, pr
 
     total_pagar = total + irpf if irpf > 0 else total
 
+    # ────────────────────────────────────────────────────────
+    # Construcción de líneas con filtrado de importes > 0
+    # ────────────────────────────────────────────────────────
     lineas = [
-        {"journal_entry_id": entry_id, "account": "6000 Compras", "debit": base, "credit": 0, "description": "Gasto", "user_id": user_id},
-        {"journal_entry_id": entry_id, "account": "4720 IVA soportado", "debit": iva, "credit": 0, "description": "IVA deducible", "user_id": user_id},
-        {"journal_entry_id": entry_id, "account": "4100 Acreedores", "debit": 0, "credit": total_pagar, "description": "Proveedor", "user_id": user_id},
+        {
+            "journal_entry_id": entry_id,
+            "account": cuenta_gasto,
+            "debit": base,
+            "credit": 0,
+            "description": "Gasto",
+            "user_id": user_id,
+        },
     ]
 
-    if irpf > 0:
+    if iva and iva > 0:
+        lineas.append({
+            "journal_entry_id": entry_id,
+            "account": "4720 IVA soportado",
+            "debit": iva,
+            "credit": 0,
+            "description": "IVA deducible",
+            "user_id": user_id,
+        })
+
+    lineas.append({
+        "journal_entry_id": entry_id,
+        "account": "4100 Acreedores",
+        "debit": 0,
+        "credit": total_pagar,
+        "description": "Proveedor",
+        "user_id": user_id,
+    })
+
+    if irpf and irpf > 0:
         lineas.append({
             "journal_entry_id": entry_id,
             "account": "4730 H.P. retenciones",
@@ -211,6 +249,9 @@ def generar_asiento_gasto(expense_id, user_id, fecha, base, iva, irpf, total, pr
             "description": "IRPF retenido",
             "user_id": user_id,
         })
+
+    # Filtro final de seguridad
+    lineas = [l for l in lineas if (l["debit"] or 0) > 0 or (l["credit"] or 0) > 0]
 
     for l in lineas:
         supabase.table("journal_entry_lines").insert(l).execute()
@@ -250,10 +291,8 @@ def crear_factura_con_rollback(invoice_data, lineas_data, user_id, cliente_nombr
     entry_id = None
 
     try:
-        # 3. Obtener hash anterior (encadenamiento)
         hash_anterior = obtener_ultimo_hash(user_id)
 
-        # 4. Generar hash Verifactu
         tipo_factura_interno = invoice_data.get("tipo", "normal")
         hash_nuevo, timestamp_hash = generar_hash_factura(
             nif_emisor=nif_emisor,
@@ -271,21 +310,18 @@ def crear_factura_con_rollback(invoice_data, lineas_data, user_id, cliente_nombr
         invoice_data["hash_anterior"] = hash_anterior
         invoice_data["fecha_hora_gen_registro"] = timestamp_hash
         invoice_data["tipo_factura"] = tipo_bd
-        invoice_data["sistema_informatico_id"] = "HF"   # ← NUEVO
+        invoice_data["sistema_informatico_id"] = "HF"
 
-        # 5. Insertar cabecera
         res = supabase.table("invoices_v2").insert(invoice_data).execute()
         if not res.data:
             return False, None, "❌ No se pudo crear la factura (error en cabecera)."
         invoice_id = res.data[0]["id"]
 
-        # 6. Insertar líneas
         for linea in lineas_data:
             linea["invoice_id"] = invoice_id
             linea["user_id"] = user_id
             supabase.table("invoice_items").insert(linea).execute()
 
-        # 7. Generar asiento contable
         entry_id = generar_asiento_factura(
             invoice_id, user_id,
             invoice_data["date"], invoice_data["base_amount"],
@@ -294,7 +330,6 @@ def crear_factura_con_rollback(invoice_data, lineas_data, user_id, cliente_nombr
             cliente_nombre,
         )
 
-        # 8. Registrar auditoría
         auditar_factura(invoice_id, "creada", hash_nuevo, user_id)
 
         return True, invoice_id, "Factura y asiento contable generados correctamente."
@@ -324,8 +359,16 @@ def crear_factura_con_rollback(invoice_data, lineas_data, user_id, cliente_nombr
         return False, None, f"Error al crear la factura: {str(e)}"
 
 
-def crear_gasto_con_rollback(expense_data, user_id, proveedor_nombre):
-    """Crea un gasto con rollback real si algo falla."""
+def crear_gasto_con_rollback(expense_data, user_id, proveedor_nombre, cuenta_gasto="6000 Compras"):
+    """
+    Crea un gasto con rollback real si algo falla.
+
+    Parámetros:
+    - expense_data: dict con los datos del gasto
+    - user_id: ID del usuario
+    - proveedor_nombre: Nombre del proveedor
+    - cuenta_gasto: Cuenta contable del PGC (default "6000 Compras")
+    """
     supabase = _get_supabase()
     expense_id = None
     entry_id = None
@@ -342,6 +385,7 @@ def crear_gasto_con_rollback(expense_data, user_id, proveedor_nombre):
             expense_data["vat_amount"], expense_data.get("irpf_amount", 0),
             expense_data["total"],
             proveedor_nombre,
+            cuenta_gasto=cuenta_gasto,
         )
 
         return True, expense_id, "Gasto y asiento contable guardados correctamente."
