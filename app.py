@@ -887,13 +887,20 @@ elif menu == "💰 Ventas":
         st.session_state.confirmar_anulacion = False
         st.session_state.factura_a_anular = None
 
-    TRANSICIONES = {
-        "pendiente": ["pagada", "vencida"],
-        "pagada": ["anulada"],
-        "vencida": [],
-        "anulada": [],
-        "rectificada": [],
-    }
+    # ────────────────────────────────────────────────────────
+# TRANSICIONES DE ESTADO PERMITIDAS
+# ────────────────────────────────────────────────────────
+# Normativa Verifactu: una factura emitida NUNCA puede pasar
+# a "anulada". Solo se permite marcar como pagada o vencida.
+# Las correcciones se hacen con factura rectificativa (tipo R1).
+# ────────────────────────────────────────────────────────
+TRANSICIONES = {
+    "pendiente": ["pagada", "vencida"],
+    "pagada": [],       # ← antes permitía "anulada", AHORA NO
+    "vencida": [],
+    "anulada": [],      # ← ya no se puede alcanzar, pero por si hay datos antiguos
+    "rectificada": [],
+}
 
     if clientes_df.empty:
         st.warning("Primero registra algún cliente.")
@@ -1530,40 +1537,33 @@ elif menu == "💰 Ventas":
                                 st.session_state.rectificativa_original = factura_row
                                 st.session_state.rectificativa_lineas = lineas_fact_list
                                 st.rerun()
-                    with col4:
-                        if estado_actual != "anulada":
-                            if not st.session_state.confirmar_anulacion or st.session_state.factura_a_anular != fact_id:
-                                if st.button("🚫 Anular factura"):
-                                    st.session_state.confirmar_anulacion = True
-                                    st.session_state.factura_a_anular = fact_id
-                                    st.rerun()
-                            else:
-                                st.warning("¿Estás seguro de que deseas anular esta factura?")
-                                confirmado = st.checkbox("Confirmo que deseo anular esta factura")
-                                col_confirm, col_cancel = st.columns(2)
-                                with col_confirm:
-                                    if st.button("Sí, anular definitivamente", disabled=not confirmado):
-                                        try:
-                                            supabase.table("invoices_v2").update({"status": "anulada"}).eq("id", fact_id).execute()
-                                            auditar_factura(fact_id, "anulada", factura_row.get("hash", ""), user_id)
-                                            st.success("Factura anulada correctamente")
-                                            st.session_state.confirmar_anulacion = False
-                                            st.session_state.factura_a_anular = None
-                                            get_invoices.clear()
-                                            st.rerun()
-                                        except Exception as e:
-                                            st.error(f"Error al anular factura: {e}")
-                                with col_cancel:
-                                    if st.button("Cancelar"):
-                                        st.session_state.confirmar_anulacion = False
-                                        st.session_state.factura_a_anular = None
-                                        st.rerun()
-            else:
-                st.info("Selecciona una factura válida de la tabla.")
-        else:
-            st.info("Haz clic en una fila para seleccionar una factura.")
+with col4:
+    # ────────────────────────────────────────────────────────
+    # INALTERABILIDAD VERIFACTU
+    # Según la AEAT (Real Decreto 1007/2023), una factura emitida
+    # NO se puede modificar ni borrar. Las correcciones se hacen
+    # mediante factura rectificativa vinculada a la original.
+    # ────────────────────────────────────────────────────────
+    if estado_actual in ("anulada", "rectificada"):
+        st.info(
+            "🔒 Factura bloqueada por normativa Verifactu.\n\n"
+            "Esta factura ya está anulada o rectificada y no admite cambios."
+        )
+    elif estado_actual == "pagada":
+        st.info(
+            "🔒 Factura pagada: bloqueada por normativa Verifactu.\n\n"
+            "Para corregirla, emite una factura rectificativa desde el botón de la izquierda."
+        )
     else:
-        st.info("No hay facturas emitidas.")
+        st.warning(
+            "⚠️ **Normativa Verifactu (RD 1007/2023)**\n\n"
+            "Las facturas emitidas son inalterables. No se pueden anular ni modificar.\n\n"
+            "Si necesitas corregir esta factura, debes **emitir una factura rectificativa**."
+        )
+        st.caption(
+            "Usa el botón **📝 Emitir rectificativa** (columna izquierda) "
+            "para generar la corrección vinculada a esta factura."
+        )
 # ════════════════════════════════════════════════════════════
 # COMPRAS (CORREGIDO - IVA 0% para Seguridad Social)
 # ════════════════════════════════════════════════════════════
