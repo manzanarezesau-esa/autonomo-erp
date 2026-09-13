@@ -8,10 +8,10 @@ import qrcode
 from qrcode.image.pil import PilImage
 import streamlit as st
 from database import init_supabase
-from verifactu_utils import generar_qr_verifactu
+from verifactu_utils import generar_url_qr_verifactu, formatear_fecha_verifactu
 
 # ============================================================
-# REPORTLAB - Importaciones globales (ya que no usamos WeasyPrint)
+# REPORTLAB - Importaciones globales
 # ============================================================
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
@@ -30,6 +30,7 @@ def _logo_sanitized(url):
     if not url:
         return ""
     return str(url).strip()
+
 
 def _get_reportlab_logo(logo_input, max_w=180, max_h=80):
     """Carga imágenes para ReportLab desde URL, Base64 o archivo local."""
@@ -70,31 +71,58 @@ def _get_reportlab_logo(logo_input, max_w=180, max_h=80):
         return None
     return None
 
+
 def get_qr_base64(invoice, client, company_config):
-    """Genera QR Veri*Factu con formato exacto de la AEAT."""
+    """
+    Genera QR Veri*Factu con formato oficial AEAT.
+
+    URL: https://www2.agenciatributaria.gob.es/wlpl/TIKE-CONT/ValidarQR
+    Parámetros: nif, numserie, fecha (DD-MM-AAAA), importe
+
+    NO incluye hash (según especificación oficial).
+    """
     invoice_number = invoice.get('invoice_number', '')
-    if '-' in invoice_number:
-        parts = invoice_number.split('-')
-        serie = parts[0] if len(parts) > 1 else "0"
-        numero = parts[-1]
-    else:
-        serie = "0"
-        numero = invoice_number
-    
+    if not invoice_number:
+        return ""
+
+    # Construir numserie = serie + numero
+    # El formato de invoice_number es "SERIE-NUMERO" (ej: "F2026-0002")
+    # o "SERIE/NUMERO" según el código original
+    numserie = invoice_number.replace("/", "-").strip()
+
     nif_emisor = company_config.get('company_tax_id', '')
-    fecha = invoice.get('date', '')
+    if not nif_emisor:
+        return ""
+
+    # Fecha de expedición en formato DD-MM-AAAA
+    fecha_raw = invoice.get('date', '')
+    if not fecha_raw:
+        return ""
+
+    try:
+        fecha_verifactu = formatear_fecha_verifactu(str(fecha_raw))
+    except Exception:
+        # Si la fecha ya viene en DD-MM-AAAA, la usamos tal cual
+        fecha_verifactu = str(fecha_raw)
+
     importe_total = invoice.get('total', 0)
-    hash_factura = invoice.get('hash', '')
-    
-    qr_data = generar_qr_verifactu(
-        nif_emisor=nif_emisor,
-        numero_factura=numero,
-        serie=serie,
-        fecha_expedicion=fecha,
-        importe_total=importe_total,
-        hash_factura=hash_factura
-    )
-    
+
+    # Determinar si es producción o pruebas
+    # Por defecto producción; cambiar a False si quieres pruebas
+    produccion = True
+
+    try:
+        qr_data = generar_url_qr_verifactu(
+            nif_emisor=nif_emisor,
+            num_serie_factura=numserie,
+            fecha_expedicion=fecha_verifactu,
+            importe_total=float(importe_total),
+            produccion=produccion,
+        )
+    except Exception as e:
+        st.error(f"Error generando URL QR Verifactu: {e}")
+        return ""
+
     qr = qrcode.QRCode(box_size=4, border=1)
     qr.add_data(qr_data)
     qr.make(fit=True)
@@ -102,6 +130,7 @@ def get_qr_base64(invoice, client, company_config):
     buffered = io.BytesIO()
     img.save(buffered, format="PNG")
     return base64.b64encode(buffered.getvalue()).decode()
+
 
 def _get_qr_image(invoice, client, company_config, max_size=80):
     """Genera imagen QR para ReportLab."""
@@ -114,6 +143,7 @@ def _get_qr_image(invoice, client, company_config, max_size=80):
     except Exception:
         return None
 
+
 # -----------------------------------------------------------
 # FUNCIONES AUXILIARES DE TEXTO
 # -----------------------------------------------------------
@@ -124,13 +154,13 @@ def split_description_into_paragraphs(desc_text):
     """
     if not desc_text:
         return [""]
-    
+
     desc_text = str(desc_text).strip()
     desc_text = re.sub(r'[\u2580-\u25FF\uFFFD]', '', desc_text)
-    
+
     raw_lines = desc_text.split('\n')
     paragraphs = []
-    
+
     for line in raw_lines:
         line = line.strip()
         if not line:
@@ -153,8 +183,9 @@ def split_description_into_paragraphs(desc_text):
                 paragraphs.append(" ".join(chunk))
         else:
             paragraphs.append(cleaned)
-            
+
     return paragraphs if paragraphs else [str(desc_text)]
+
 
 def _fmt_money(valor):
     """Formatea valor como moneda."""
@@ -163,19 +194,16 @@ def _fmt_money(valor):
     except (ValueError, TypeError):
         return "0.00 €"
 
+
 # -----------------------------------------------------------
-# FACTURA (REPORTLAB - Reemplaza a WeasyPrint)
+# FACTURA (REPORTLAB)
 # -----------------------------------------------------------
 def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
     """
     Genera PDF de factura usando ReportLab.
-    Reemplaza a WeasyPrint para evitar dependencias del sistema.
     """
     styles = getSampleStyleSheet()
-    
-    # ============================================================
-    # ESTILOS
-    # ============================================================
+
     company_style = ParagraphStyle(
         'CompanyStyle',
         parent=styles['Heading2'],
@@ -184,7 +212,7 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         textColor=colors.HexColor('#1E3A8A'),
         spaceAfter=2,
     )
-    
+
     company_info_style = ParagraphStyle(
         'CompanyInfoStyle',
         parent=styles['Normal'],
@@ -193,7 +221,7 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         textColor=colors.HexColor('#4A5568'),
         spaceAfter=1,
     )
-    
+
     title_style = ParagraphStyle(
         'TitleStyle',
         parent=styles['Title'],
@@ -203,7 +231,7 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         spaceAfter=4,
         alignment=TA_CENTER,
     )
-    
+
     meta_label_style = ParagraphStyle(
         'MetaLabelStyle',
         parent=styles['Normal'],
@@ -212,7 +240,7 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         textColor=colors.HexColor('#2D3748'),
         spaceAfter=1,
     )
-    
+
     desc_style = ParagraphStyle(
         'DescStyle',
         parent=styles['Normal'],
@@ -223,7 +251,7 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         spaceAfter=0,
         alignment=TA_LEFT,
     )
-    
+
     desc_header_style = ParagraphStyle(
         'DescHeaderStyle',
         parent=styles['Normal'],
@@ -235,7 +263,7 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         spaceAfter=0,
         alignment=TA_LEFT,
     )
-    
+
     num_style = ParagraphStyle(
         'NumStyle',
         parent=styles['Normal'],
@@ -246,7 +274,7 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         spaceAfter=0,
         alignment=TA_RIGHT,
     )
-    
+
     num_header_style = ParagraphStyle(
         'NumHeaderStyle',
         parent=styles['Normal'],
@@ -258,7 +286,7 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         spaceAfter=0,
         alignment=TA_RIGHT,
     )
-    
+
     center_style = ParagraphStyle(
         'CenterStyle',
         parent=styles['Normal'],
@@ -269,7 +297,7 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         spaceAfter=0,
         alignment=TA_CENTER,
     )
-    
+
     center_header_style = ParagraphStyle(
         'CenterHeaderStyle',
         parent=styles['Normal'],
@@ -281,7 +309,7 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         spaceAfter=0,
         alignment=TA_CENTER,
     )
-    
+
     total_label_style = ParagraphStyle(
         'TotalLabelStyle',
         parent=styles['Normal'],
@@ -292,7 +320,7 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         spaceAfter=0,
         alignment=TA_LEFT,
     )
-    
+
     total_value_style = ParagraphStyle(
         'TotalValueStyle',
         parent=styles['Normal'],
@@ -304,11 +332,11 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         alignment=TA_RIGHT,
         fontName='Helvetica-Bold',
     )
-    
+
     total_final_style = ParagraphStyle(
         'TotalFinalStyle',
         parent=styles['Normal'],
- fontSize=12,
+        fontSize=12,
         leading=14,
         textColor=colors.HexColor('#1E3A8A'),
         spaceBefore=0,
@@ -316,7 +344,7 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         alignment=TA_RIGHT,
         fontName='Helvetica-Bold',
     )
-    
+
     footer_style = ParagraphStyle(
         'FooterStyle',
         parent=styles['Normal'],
@@ -325,38 +353,32 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         textColor=colors.HexColor('#718096'),
         alignment=TA_CENTER,
     )
-    
-    # ============================================================
-    # DATOS
-    # ============================================================
+
     PAGE_WIDTH, PAGE_HEIGHT = A4
     MARGIN_LEFT = 1.2 * cm
     MARGIN_RIGHT = 1.2 * cm
     MARGIN_TOP = 1.0 * cm
     MARGIN_BOTTOM = 1.0 * cm
     PRINTABLE_WIDTH = PAGE_WIDTH - MARGIN_LEFT - MARGIN_RIGHT
-    
+
     company_name = company_config.get('company_name', '')
     company_tax_id = company_config.get('company_tax_id', '')
     company_address = company_config.get('company_address', '')
     company_iban = company_config.get('company_iban', '')
     company_phone = company_config.get('company_phone', '')
     company_email = company_config.get('company_email', '')
-    
+
     client_name = client.get('name', '')
     client_tax_id = client.get('tax_id', '')
     client_address = client.get('address', '')
-    
+
     invoice_number = invoice.get('invoice_number', '')
     invoice_date = invoice.get('date', '')
     invoice_month = invoice.get('month', '')
     invoice_status = invoice.get('status', 'Pendiente')
     es_rectificativa = company_config.get('es_rectificativa', False)
     factura_original = company_config.get('factura_original_num', '')
-    
-    # ============================================================
-    # CONSTRUIR DOCUMENTO
-    # ============================================================
+
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer,
@@ -366,14 +388,12 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         topMargin=MARGIN_TOP,
         bottomMargin=MARGIN_BOTTOM,
     )
-    
+
     story = []
-    
-    # Logo
+
     logo_input = company_config.get('company_logo', '')
     logo_element = _get_reportlab_logo(logo_input, max_w=150, max_h=70)
-    
-    # Cabecera
+
     if logo_element:
         header_data = [
             [logo_element, Paragraph(f"<b>{company_name}</b>", company_style)],
@@ -390,7 +410,7 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
             [Paragraph(f"Tel: {company_phone} | Email: {company_email}", company_info_style), Paragraph("", company_info_style)],
         ]
         header_col_widths = [PRINTABLE_WIDTH, PRINTABLE_WIDTH]
-    
+
     header_table = Table(header_data, colWidths=header_col_widths)
     header_table.setStyle(TableStyle([
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
@@ -399,22 +419,20 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
         ('LINEBELOW', (0, -1), (-1, -1), 1.5, colors.HexColor('#1E3A8A')),
     ]))
-    
+
     story.append(header_table)
     story.append(Spacer(1, 10))
-    
-    # Título de factura
+
     if es_rectificativa:
         story.append(Paragraph("FACTURA RECTIFICATIVA", title_style))
         if factura_original:
             story.append(Paragraph(f"Rectifica a la factura: {factura_original}", meta_label_style))
     else:
         story.append(Paragraph("FACTURA", title_style))
-    
+
     story.append(Paragraph(f"Nº {invoice_number}", meta_label_style))
     story.append(Spacer(1, 6))
-    
-    # Datos del cliente y metadata
+
     meta_data = [
         [
             Paragraph(f"<b>DATOS DEL CLIENTE</b>", meta_label_style),
@@ -433,7 +451,7 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
             Paragraph("", meta_label_style),
         ],
     ]
-    
+
     meta_table = Table(meta_data, colWidths=[PRINTABLE_WIDTH * 0.65, PRINTABLE_WIDTH * 0.35])
     meta_table.setStyle(TableStyle([
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
@@ -442,11 +460,10 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         ('RIGHTPADDING', (0, 0), (-1, -1), 0),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
     ]))
-    
+
     story.append(meta_table)
     story.append(Spacer(1, 8))
-    
-    # Tabla de líneas
+
     col_desc_width = PRINTABLE_WIDTH * 0.40
     col_qty_width = PRINTABLE_WIDTH * 0.08
     col_price_width = PRINTABLE_WIDTH * 0.13
@@ -454,12 +471,12 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
     col_vat_width = PRINTABLE_WIDTH * 0.10
     col_irpf_width = PRINTABLE_WIDTH * 0.08
     col_total_width = PRINTABLE_WIDTH * 0.08
-    
+
     col_widths = [col_desc_width, col_qty_width, col_price_width, col_base_width, col_vat_width, col_irpf_width, col_total_width]
-    
+
     vat_pct_display = invoice.get('vat_percentage', 21)
     irpf_pct_display = invoice.get('irpf_percentage', 0)
-    
+
     headers = [
         Paragraph('<b>Concepto</b>', desc_header_style),
         Paragraph('<b>Cant.</b>', center_header_style),
@@ -469,9 +486,9 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         Paragraph(f'<b>IRPF ({irpf_pct_display:.0f}%)</b>', num_header_style),
         Paragraph('<b>Total</b>', num_header_style),
     ]
-    
+
     rows = [headers]
-    
+
     for linea in lineas:
         desc = linea.get('description', '')
         qty = linea.get('quantity', 1)
@@ -480,7 +497,7 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         vat_amt = linea.get('vat_amount', 0)
         irpf_amt = linea.get('irpf_amount', 0)
         total_line = linea.get('total', base)
-        
+
         rows.append([
             Paragraph(desc, desc_style),
             Paragraph(f"{float(qty):.0f}", center_style),
@@ -490,7 +507,7 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
             Paragraph(f"-{_fmt_money(irpf_amt)}", num_style),
             Paragraph(f"<b>{_fmt_money(total_line)}</b>", num_style),
         ])
-    
+
     lines_table = Table(rows, colWidths=col_widths, repeatRows=1)
     lines_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1E3A8A')),
@@ -504,25 +521,24 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         ('LINEBELOW', (0, 1), (-1, -1), 0.3, colors.HexColor('#E2E8F0')),
         ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
     ]))
-    
+
     story.append(lines_table)
     story.append(Spacer(1, 8))
-    
-    # Totales
+
     totals_width = PRINTABLE_WIDTH * 0.35
     totals_left_offset = PRINTABLE_WIDTH - totals_width
-    
+
     totals_data = [
         [Paragraph('Base imponible:', total_label_style), Paragraph(_fmt_money(invoice.get('base_amount', 0)), total_value_style)],
         [Paragraph(f'IVA ({vat_pct_display:.0f}%):', total_label_style), Paragraph(_fmt_money(invoice.get('vat_amount', 0)), total_value_style)],
         [Paragraph(f'IRPF ({irpf_pct_display:.0f}%):', total_label_style), Paragraph(f"-{_fmt_money(invoice.get('irpf_amount', 0))}", total_value_style)],
     ]
-    
+
     totals_data.append([
         Paragraph('<b>TOTAL A PAGAR:</b>', total_final_style),
         Paragraph(f'<b>{_fmt_money(invoice.get("total", 0))}</b>', total_final_style),
     ])
-    
+
     totals_table = Table(totals_data, colWidths=[totals_width * 0.50, totals_width * 0.50])
     totals_table.setStyle(TableStyle([
         ('ALIGN', (0, 0), (0, -1), 'LEFT'),
@@ -532,22 +548,20 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
         ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
         ('LINEABOVE', (0, -1), (-1, -1), 1, colors.HexColor('#1E3A8A')),
     ]))
-    
+
     totals_wrapper = Table([['', totals_table]], colWidths=[totals_left_offset, totals_width])
     totals_wrapper.setStyle(TableStyle([
         ('LEFTPADDING', (0, 0), (-1, -1), 0),
         ('RIGHTPADDING', (0, 0), (-1, -1), 0),
     ]))
-    
+
     story.append(totals_wrapper)
     story.append(Spacer(1, 8))
-    
-    # Información de pago
+
     story.append(Paragraph(f"<b>Forma de pago:</b> Transferencia bancaria", meta_label_style))
     story.append(Paragraph(f"<b>IBAN:</b> {company_iban}", meta_label_style))
     story.append(Spacer(1, 10))
-    
-    # QR Veri*Factu
+
     qr_img = _get_qr_image(invoice, client, company_config, max_size=70)
     if qr_img:
         qr_data = [
@@ -559,28 +573,29 @@ def make_invoice_pdf_from_template(invoice, client, company_config, lineas):
             ('ALIGN', (1, 0), (1, -1), 'CENTER'),
         ]))
         story.append(qr_table)
-    
+
     story.append(Spacer(1, 6))
     story.append(Paragraph(
         "Sistema de facturación verificable / VERI*FACTU - Factura verificable en la sede electrónica de la AEAT",
         footer_style
     ))
-    
+
     doc.build(story)
     pdf_bytes = buffer.getvalue()
     buffer.close()
-    
+
     return pdf_bytes
 
+
 # -----------------------------------------------------------
-# PRESUPUESTO (REPORTLAB MULTIPÁGINA Y SÍMBOLOS LIMPIOS)
+# PRESUPUESTO
 # -----------------------------------------------------------
 def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_pct, budget_number=None):
     """
     Genera PDF de presupuesto con maquetación compacta y profesional.
     """
     styles = getSampleStyleSheet()
-    
+
     company_style = ParagraphStyle(
         'CompanyStyle',
         parent=styles['Heading2'],
@@ -589,7 +604,7 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
         textColor=colors.HexColor('#1E3A8A'),
         spaceAfter=3,
     )
-    
+
     company_info_style = ParagraphStyle(
         'CompanyInfoStyle',
         parent=styles['Normal'],
@@ -598,7 +613,7 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
         textColor=colors.HexColor('#4A5568'),
         spaceAfter=2,
     )
-    
+
     title_style = ParagraphStyle(
         'TitleStyle',
         parent=styles['Title'],
@@ -608,7 +623,7 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
         spaceAfter=6,
         alignment=TA_CENTER,
     )
-    
+
     client_info_style = ParagraphStyle(
         'ClientInfoStyle',
         parent=styles['Normal'],
@@ -732,9 +747,6 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
         alignment=TA_CENTER,
     )
 
-    # ============================================================
-    # CONSTRUIR DOCUMENTO
-    # ============================================================
     PAGE_WIDTH, PAGE_HEIGHT = A4
     MARGIN_LEFT = 1.2 * cm
     MARGIN_RIGHT = 1.2 * cm
@@ -864,68 +876,4 @@ def make_budget_pdf(company, client, lineas, base_total, vat_total, total, vat_p
         ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
         ('LEFTPADDING', (0, 0), (-1, -1), 5),
         ('RIGHTPADDING', (0, 0), (-1, -1), 5),
-        ('LINEBELOW', (0, 0), (-1, 0), 1, colors.HexColor('#1E3A8A')),
-    ]
-
-    for idx in item_end_indices:
-        table_style.append(('LINEBELOW', (0, idx), (-1, idx), 0.5, colors.HexColor('#CBD5E0')))
-
-    lines_table.setStyle(TableStyle(table_style))
-    story.append(lines_table)
-    story.append(Spacer(1, 10))
-
-    vat_pct_display = vat_pct or 0
-    totals_width = PRINTABLE_WIDTH * 0.40
-    totals_left_offset = PRINTABLE_WIDTH - totals_width
-
-    totals_data = [
-        [Paragraph('Base imponible:', total_label_style), Paragraph(_fmt_money(base_total), total_value_style)],
-        [Paragraph(f'IVA ({vat_pct_display:.1f}%):', total_label_style), Paragraph(_fmt_money(vat_total), total_value_style)],
-    ]
-
-    irpf_total = sum(l.get('irpf_amount', 0) for l in lineas)
-    if irpf_total > 0:
-        irpf_pct = lineas[0].get('irpf_percentage', 0) if lineas else 0
-        totals_data.append([
-            Paragraph(f'IRPF ({irpf_pct:.1f}%):', total_label_style),
-            Paragraph(f'-{_fmt_money(irpf_total)}', total_value_style)
-        ])
-
-    totals_data.append([
-        Paragraph('<b>TOTAL:</b>', total_final_style),
-        Paragraph(f'<b>{_fmt_money(total)}</b>', total_final_style),
-    ])
-
-    totals_table = Table(totals_data, colWidths=[totals_width * 0.45, totals_width * 0.55])
-    totals_table.setStyle(TableStyle([
-        ('ALIGN', (0, 0), (0, -1), 'LEFT'),
-        ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('TOPPADDING', (0, 0), (-1, -1), 3),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-        ('LEFTPADDING', (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-        ('LINEABOVE', (0, -1), (-1, -1), 1, colors.HexColor('#1E3A8A')),
-    ]))
-
-    totals_wrapper = Table([['', totals_table]], colWidths=[totals_left_offset, totals_width])
-    totals_wrapper.setStyle(TableStyle([
-        ('LEFTPADDING', (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-        ('TOPPADDING', (0, 0), (-1, -1), 0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
-    ]))
-
-    story.append(totals_wrapper)
-    story.append(Spacer(1, 15))
-
-    story.append(Paragraph(
-        "Presupuesto válido por 30 días · Gracias por confiar en nosotros",
-        footer_style
-    ))
-
-    doc.build(story)
-    pdf_bytes = buffer.getvalue()
-    buffer.close()
-
-    return pdf_bytes
+        ('LINE
